@@ -1,0 +1,44 @@
+# Looks inside the Android base (base.lock) and reports what Hearth Droid's next steps build on: the web engine's
+# configuration, Android's A/B updater, TrebleDroid's start-up hooks, USB setup. Read-only; makes no image.
+name: Inspect the Android base
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Base
+        run: |
+          set -a; . ./base.lock; set +a
+          mkdir -p dl
+          curl -fsSL --retry 3 -o "dl/$BASE_FILE" "https://github.com/TrebleDroid/treble_experimentations/releases/download/$BASE_TAG/$BASE_FILE"
+          echo "$BASE_SHA256  dl/$BASE_FILE" | sha256sum -c -
+          xz -d -T0 "dl/$BASE_FILE"
+          mkdir -p m && sudo mount -o loop,ro "dl/${BASE_FILE%.xz}" m
+      - name: Report
+        run: |
+          S=m/system
+          n() { printf '%s' "$2" | head -c 3900 | tr '\n' '|' | sed "s/^/::notice title=$1::/"; echo; }
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          n "init rc files" "$(ls $S/etc/init | tr '\n' ' ')"
+          n "phh/treble scripts" "$(ls $S/bin | grep -i -E 'phh|treble|rw-system|on-boot' | tr '\n' ' ')"
+          for f in $S/bin/rw-system.sh $S/bin/phh-on-boot.sh $S/bin/phh-on-data.sh; do
+            [ -f "$f" ] && n "$(basename $f) (head)" "$(head -c 3500 "$f")"
+          done
+          n "rc mentioning phh" "$(grep -l -r -i 'phh\|rw-system' $S/etc/init 2>/dev/null | tr '\n' ' ')"
+          for f in $(grep -l -r -i 'rw-system\|phh-on-boot\|phh-on-data' $S/etc/init 2>/dev/null | head -3); do n "$(basename $f)" "$(cat $f)"; done
+          n "webview config" "$($bt/aapt2 dump xmltree --file res/xml/config_webview_packages.xml $S/framework/framework-res.apk 2>&1 | head -60)"
+          n "webview apks" "$(find $S -iname '*webview*' -maxdepth 4 | tr '\n' ' ')"
+          n "update_engine" "$(ls -la $S/bin/update_engine $S/bin/update_verifier 2>&1; ls $S/etc/update_engine 2>&1; ls $S/etc/security 2>&1 | head -20)"
+          n "otacerts / update key" "$(ls -la $S/etc/security/otacerts.zip $S/etc/update_engine/update-payload-key.pub.pem 2>&1)"
+          n "update_engine rc" "$(cat $S/etc/init/update_engine.rc 2>&1 | head -40)"
+          n "usb in rc" "$(grep -r -h -i 'sys.usb\|usb.config\|configfs' $S/etc/init/hw/init.usb*.rc $S/etc/init/hw/init.rc 2>/dev/null | head -40)"
+          n "props (adb/usb/webview/ota)" "$(grep -h -i -E 'adb|usb|webview|ota|update' $S/build.prop $S/product/etc/build.prop $S/system_ext/etc/build.prop 2>/dev/null | head -40)"
+          n "phh treble app" "$(find $S -iname '*treble*app*' -o -iname 'TrebleApp*' | head; ls $S/priv-app | grep -i -E 'treble|phh|update' )"
