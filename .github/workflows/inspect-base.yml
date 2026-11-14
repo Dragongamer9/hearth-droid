@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
@@ -51,7 +51,14 @@ jobs:
           n "usb in rc" "$(grep -r -h -i 'sys.usb\|usb.config\|configfs' $S/etc/init/hw/init.usb*.rc $S/etc/init/hw/init.rc 2>/dev/null | head -40)"
           n "props (adb/usb/webview/ota)" "$(grep -h -i -E 'adb|usb|webview|ota|update' $S/build.prop $S/product/etc/build.prop $S/system_ext/etc/build.prop 2>/dev/null | head -40)"
           n "phh treble app" "$(find $S -iname '*treble*app*' -o -iname 'TrebleApp*' | head; ls $S/priv-app | grep -i -E 'treble|phh|update' )"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: base-report
-          path: report.txt
+      # The report goes on the reports branch (never main), as reports/base.txt.
+      - name: Save the report
+        run: |
+          git config user.name Dragongamer9
+          git config user.email Dragongamer9@users.noreply.github.com
+          cp report.txt "$RUNNER_TEMP/base.txt"
+          git fetch -q origin reports 2>/dev/null && git checkout -q -B reports origin/reports || git checkout -q --orphan reports
+          git rm -rq --cached . >/dev/null 2>&1 || true
+          mkdir -p reports && cp "$RUNNER_TEMP/base.txt" reports/base.txt
+          git add reports/base.txt
+          git commit -qm "Base report" && git push -q origin reports
