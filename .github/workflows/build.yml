@@ -1,0 +1,97 @@
+# Hearth Droid: a TrebleDroid GSI (base.lock) with Hearth built in (build/remix.sh), as a test build you download
+# from this run's Artifacts. Nothing is released from here: a release needs the owner's version number.
+name: Build Hearth Droid
+
+on:
+  push:
+    branches: [main]
+    paths: ['build/**', 'base.lock', '.github/workflows/build.yml']
+  workflow_dispatch:
+    inputs:
+      hearth_release:
+        description: "Hearth OS release to take Hearth for Android from (a tag like v1.11.0, or latest)"
+        default: latest
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Room on the disk
+        run: |
+          # The base unpacks to about 3 GB and the image is copied twice; GitHub's runner keeps ~20 GB free.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          echo "::notice title=Disk::$(df -h --output=avail / | tail -1 | tr -d ' ') free"
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq erofs-utils android-sdk-libsparse-utils attr xz-utils python3-pil fonts-dejavu-core >/dev/null
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          [ -x "$bt/aapt2" ] || { echo "::error title=Tools::no aapt2 in $ANDROID_HOME/build-tools"; exit 1; }
+          echo "AAPT2=$bt/aapt2" >> "$GITHUB_ENV"
+
+      - name: Android base (base.lock)
+        run: |
+          set -a; . ./base.lock; set +a
+          mkdir -p dl
+          curl -fsSL --retry 3 -o "dl/$BASE_FILE" \
+            "https://github.com/TrebleDroid/treble_experimentations/releases/download/$BASE_TAG/$BASE_FILE"
+          sha=$(sha256sum "dl/$BASE_FILE" | cut -d' ' -f1)
+          if [ -n "$BASE_SHA256" ] && [ "$sha" != "$BASE_SHA256" ]; then
+            echo "::error title=Base::$BASE_FILE's SHA-256 is $sha, base.lock says $BASE_SHA256"; exit 1
+          fi
+          [ -n "$BASE_SHA256" ] || echo "::notice title=Base not pinned::BASE_SHA256=$sha (put it in base.lock to pin it)"
+          xz -d -T0 "dl/$BASE_FILE"
+          echo "BASE_IMG=dl/${BASE_FILE%.xz}" >> "$GITHUB_ENV"
+          echo "BASE_TAG=$BASE_TAG" >> "$GITHUB_ENV"
+          echo "::notice title=Base::TrebleDroid $BASE_TAG ($BASE_FILE), Android $BASE_ANDROID"
+
+      - name: Hearth for Android
+        env:
+          REL: ${{ github.event.inputs.hearth_release || 'latest' }}
+        run: |
+          if [ "$REL" = latest ]; then
+            url=https://github.com/Dragongamer9/hearth-os/releases/latest/download/Hearth-android.apk
+          else
+            url=https://github.com/Dragongamer9/hearth-os/releases/download/$REL/Hearth-android.apk
+          fi
+          curl -fsSL --retry 3 -o dl/Hearth-android.apk "$url"
+          "$AAPT2" dump badging dl/Hearth-android.apk | head -1 | sed 's/^/::notice title=Hearth APK::/'
+
+      - name: Boot animation
+        run: python3 build/make-bootanimation.py dl/bootanimation.zip
+
+      - name: Build Hearth into Android
+        run: |
+          id="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          echo "BUILD_ID=$id" >> "$GITHUB_ENV"
+          mkdir -p out
+          sudo bash build/remix.sh "$BASE_IMG" dl/Hearth-android.apk dl/bootanimation.zip "$AAPT2" \
+            out/hearth-droid-arm64-ab.img "$RUNNER_TEMP/work" "$BASE_TAG" "$id"
+          sudo chown "$USER" out/hearth-droid-arm64-ab.img
+          rm -f "$BASE_IMG"
+
+      - name: Pack
+        run: |
+          cd out
+          xz -T0 -6 hearth-droid-arm64-ab.img
+          sha256sum hearth-droid-arm64-ab.img.xz > hearth-droid-arm64-ab.img.xz.sha256
+          echo "::notice title=Test build $BUILD_ID::$(du -h hearth-droid-arm64-ab.img.xz | cut -f1), SHA-256 $(cut -d' ' -f1 hearth-droid-arm64-ab.img.xz.sha256)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hearth-droid-test-${{ env.BUILD_ID }}
+          path: out/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error

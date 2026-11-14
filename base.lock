@@ -1,0 +1,7 @@
+# The Android base Hearth Droid is built on: a TrebleDroid GSI (https://github.com/TrebleDroid/treble_experimentations).
+# Changing these changes what every build starts from. BASE_SHA256 empty = the build prints the file's SHA-256 as a
+# notice; paste it here to pin it (after that a different file stops the build).
+BASE_TAG=ci-20250415
+BASE_FILE=system-td-arm64-ab-vanilla.img.xz
+BASE_ANDROID=15
+BASE_SHA256=
