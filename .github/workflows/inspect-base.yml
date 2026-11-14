@@ -45,6 +45,11 @@ jobs:
           n "labels of phh files" "$(getfattr -n security.selinux $S/bin/phh-on-boot.sh $S/bin/phh-ota $S/bin/rw-system.sh $S/etc/init/vndk.rc $S/bin/sh 2>&1)"
           n "ota props" "$(grep -h -i -E 'ota|json|update' $S/build.prop $S/product/etc/build.prop $S/system_ext/etc/build.prop 2>/dev/null | head -30)"
           n "treble app" "$(find $S -path '*TrebleApp*' -o -path '*treble_app*' -o -name 'me.phh.treble*' 2>/dev/null | head; ls $S/priv-app $S/system_ext/priv-app $S/product/priv-app 2>/dev/null | grep -i -E 'treble|phh')"
+          n "build tags" "$(grep -h -E 'ro.(system.)?build.(tags|type)=' $S/build.prop)"
+          as=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          n "framework-res signer" "$($as verify --print-certs $S/framework/framework-res.apk 2>&1 | grep -E 'DN|SHA-256' | head -4)"
+          curl -fsSL "https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security/platform.x509.pem?format=TEXT" | base64 -d > aosp-platform.pem
+          n "AOSP test platform key" "$(openssl x509 -in aosp-platform.pem -noout -fingerprint -sha256 -subject 2>&1)"
           n "permissive domains" "$(grep -h -r 'typepermissive' $S/etc/selinux $S/system_ext/etc/selinux $S/product/etc/selinux 2>/dev/null | head -20)"
           n "phh-ota.rc" "$(cat $S/etc/init/phh-ota.rc 2>&1 | head -60)"
           n "update_engine rc" "$(cat $S/etc/init/update_engine.rc 2>&1 | head -40)"
