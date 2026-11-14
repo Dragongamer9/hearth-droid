@@ -167,8 +167,8 @@ def plan(path, system_img, partsdir):
             f"{used(grp) >> 20} MB used) even without product")
 
     args = ["--metadata-size", str(s["max_size"]), "--super-name", dev["name"], "--metadata-slots", str(s["slots"]),
-            "--device", f"{dev['name']}:{dev['size']}", "--alignment", str(dev["align"] or 1048576),
-            "--alignment-offset", str(dev["align_off"])]
+            # lpmake takes the alignment inside --device (separate --alignment flags mean "no --device")
+            "--device", f"{dev['name']}:{dev['size']}:{dev['align'] or 1048576}:{dev['align_off']}"]
     if s["flags"] & FLAG_VIRTUAL_AB:
         args.append("--virtual-ab")
     for g in s["groups"]:
