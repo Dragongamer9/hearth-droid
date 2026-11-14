@@ -50,3 +50,19 @@ the boot animation for more than 10 minutes, or keeps restarting, see below.
 ## Going back to Hearth OS (Droidian)
 
 Flash the stock firmware with SP Flash Tool (Download Only), then put Hearth OS back with hearth-devices' RT8 guide.
+
+## From the bootloader (when fastbootd isn't seen over USB)
+
+On the RT8, fastbootd (`fastboot reboot fastboot`) may not show up on the PC at all. Then Hearth Droid goes in as a
+whole new super partition, flashed from the normal bootloader:
+
+1. Download the kit: Actions › **Bootloader install kit** › newest green run › Artifacts ›
+   `hearth-droid-bootloader-kit`. Unzip it next to the Hearth Droid image.
+2. `sudo apt install android-sdk-libsparse-utils` (for simg2img), then build the image (it only makes a file):
+
+       ./make-super.sh <stock firmware folder>/super.img hearth-droid-arm64-ab.img hearth-super.img
+
+3. It prints the flash commands at the end (which slot, stock boot files, `fastboot flash super`, wipe, reboot).
+   Run them with the tablet on the normal fastboot screen.
+
+Way back: the same commands with the stock firmware's `super.img`.

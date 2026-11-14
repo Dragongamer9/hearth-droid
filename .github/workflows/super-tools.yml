@@ -1,0 +1,67 @@
+# The bootloader install kit (docs/FLASHING-RT8.md, "From the bootloader"): Android's own super-partition tools
+# (lpdump, lpunpack, lpmake), built from AOSP source (LonelyFool/lpunpack_and_lpmake, pinned) as static x86_64 Linux
+# programs, plus tools/make-super.sh. On the owner's laptop it builds a super image from the RT8's stock super.img with
+# Hearth Droid as its system, for devices whose fastbootd can't be reached over USB.
+name: Bootloader install kit
+
+on:
+  push:
+    branches: [main]
+    paths: ['tools/**', '.github/workflows/super-tools.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LP_REPO: https://github.com/LonelyFool/lpunpack_and_lpmake
+  LP_COMMIT: 7ec860cfa95ed83dec579ab0459aad1c35ad48e4
+
+jobs:
+  kit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Android's super tools
+        run: |
+          sudo apt-get install -y -qq clang >/dev/null
+          git init -q lp && cd lp
+          git fetch -q --depth 1 "$LP_REPO" "$LP_COMMIT" && git checkout -q FETCH_HEAD
+          bash make.sh > ../lp-build.log 2>&1 || { echo "::error title=Super tools::$(tail -30 ../lp-build.log | tr '\n' '|' | cut -c1-3500)"; exit 1; }
+          for t in lpdump lpunpack lpmake; do
+            [ -x "bin/$t" ] || { echo "::error title=Super tools::$t wasn't built"; exit 1; }
+            file "bin/$t" | grep -q 'statically linked' || echo "::warning title=Super tools::$t isn't static: $(file bin/$t)"
+          done
+          ./bin/lpmake --help >/dev/null 2>&1 || true
+          echo "::notice title=Super tools::lpdump, lpunpack, lpmake from AOSP (LonelyFool/lpunpack_and_lpmake ${LP_COMMIT::7})"
+      - name: Test the script on a pretend super image
+        run: |
+          set -e
+          sudo apt-get install -y -qq android-sdk-libsparse-utils >/dev/null
+          mkdir -p kit/bin && cp lp/bin/lpdump lp/bin/lpunpack lp/bin/lpmake kit/bin/
+          cp tools/make-super.sh kit/ && chmod +x kit/make-super.sh
+          t=$RUNNER_TEMP/t; mkdir -p $t
+          # A stock-shaped super: virtual A/B, group main_a/main_b, system/vendor/product in slot a, empty slot b.
+          truncate -s 300M $t/sys.img $t/ven.img $t/pro.img
+          mkfs.ext4 -q $t/sys.img; mkfs.ext4 -q $t/ven.img; mkfs.ext4 -q $t/pro.img
+          kit/bin/lpmake --metadata-size 65536 --super-name super --metadata-slots 3 --virtual-ab \
+            --device super:2147483648 --group main_a:2143289344 --group main_b:2143289344 \
+            --partition system_a:readonly:314572800:main_a --image system_a=$t/sys.img \
+            --partition vendor_a:readonly:314572800:main_a --image vendor_a=$t/ven.img \
+            --partition product_a:readonly:314572800:main_a --image product_a=$t/pro.img \
+            --partition system_b:readonly:0:main_b --partition vendor_b:readonly:0:main_b --partition product_b:readonly:0:main_b \
+            --sparse --output $t/stock-super.img >/dev/null
+          # The new system: bigger than stock's, as Hearth Droid's is.
+          truncate -s 1200M $t/hd.img; mkfs.ext4 -q $t/hd.img
+          kit/make-super.sh $t/stock-super.img $t/hd.img $t/hearth-super.img
+          kit/bin/lpdump $t/hearth-super.img > $t/dump.txt 2>&1 || { sudo apt-get install -y -qq android-sdk-libsparse-utils >/dev/null; simg2img $t/hearth-super.img $t/raw.img; kit/bin/lpdump $t/raw.img > $t/dump.txt; }
+          grep -A3 'Name: system_a' $t/dump.txt | grep -q 'Attributes: readonly' || { echo "::error title=Kit test::system_a missing"; cat $t/dump.txt; exit 1; }
+          grep -q 'Name: vendor_a' $t/dump.txt || { echo "::error title=Kit test::vendor_a missing"; exit 1; }
+          echo "::notice title=Kit test::$(grep -E 'Name: (system|vendor|product)_a' -A4 $t/dump.txt | grep -E 'Name|Extents|Size' | tr '\n' ' ' | cut -c1-800)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hearth-droid-bootloader-kit
+          path: kit/
+          retention-days: 30
+          if-no-files-found: error
