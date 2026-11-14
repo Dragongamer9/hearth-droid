@@ -1,0 +1,572 @@
+===== init rc files
+UprobeStats-platform.rc aconfigd.rc adbd.rc android.hardware.biometrics.fingerprint@2.1-service.oplus.rc android.hardware.biometrics.fingerprint@2.1-service.oppo.rc android.hardware.bluetooth.audio-service-system.rc android.system.suspend-service.rc apexd.rc atrace.rc atrace_userdebug.rc audioserver.rc blank_screen.rc bootanim.rc bootstat-debug.rc bootstat.rc cameraserver.rc charger.rc clean_scratch_files.rc config cppreopts.rc credstore.rc dmesgd.rc drmserver_dynamic.rc dumpstate.rc evgrab.rc flags_health_check.rc gatekeeperd.rc gpuservice.rc gsid.rc heapprofd.rc hw idmap2d.rc incidentd.rc init-debug.rc installd.rc kcmdlinectrl.rc keystore2.rc lmkd.rc logcatd.rc logd.rc logtagd.rc lpdumpd.rc mdnsd.rc mediaextractor.rc mediametrics.rc mediaserver_dynamic.rc misctrl.rc mtectrl.rc mtk-sms-fwk-ready.rc netbpfload.rc netd.rc odsign.rc oplus-alert-slider.rc otapreopt.rc perfetto.rc phh-ota.rc phh-remotectl.rc prefetch.rc prng_seeder.rc profcollectd.rc recovery-persist.rc recovery-refresh.rc rss_hwm_reset.rc servicemanager.rc simpleperf.rc slsi-booted.rc snapuserd.rc storaged.rc su.rc surfaceflinger.rc tombstoned.rc traced_perf.rc tradeinmode.rc twrp.rc uncrypt.rc update_engine.rc update_verifier.rc usbd.rc virtual_camera.hal.rc vndk.rc vold.rc wifi.rc wificond.rc 
+===== phh/treble scripts
+
+===== rw-system.sh (head)
+#!/system/bin/sh
+
+if [ -z "$debug" ] && [ -f /cache/phh-log ];then
+	mkdir -p /cache/phh
+	debug=1 exec sh -x "$(readlink -f -- "$0")" > /cache/phh/logs 2>&1
+else
+    # Allow accessing logs from system app
+    # Protected via SELinux for other apps
+    chmod 0755 /cache/phh
+    chmod 0644 /cache/phh/logs
+fi
+
+if [ -f /cache/phh-adb ];then
+    setprop ctl.stop adbd
+    setprop ctl.stop adbd_apex
+    mount -t configfs none /config
+    rm -Rf /config/usb_gadget
+    mkdir -p /config/usb_gadget/g1
+
+    echo 0x12d1 > /config/usb_gadget/g1/idVendor
+    echo 0x103A > /config/usb_gadget/g1/idProduct
+    mkdir -p /config/usb_gadget/g1/strings/0x409
+    echo phh > /config/usb_gadget/g1/strings/0x409/serialnumber
+    echo phh > /config/usb_gadget/g1/strings/0x409/manufacturer
+    echo phh > /config/usb_gadget/g1/strings/0x409/product
+
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    mkdir /config/usb_gadget/g1/functions/mtp.gs0
+    mkdir /config/usb_gadget/g1/functions/ptp.gs1
+
+    mkdir /config/usb_gadget/g1/configs/c.1/
+    mkdir /config/usb_gadget/g1/configs/c.1/strings/0x409
+    echo 'ADB MTP' > /config/usb_gadget/g1/configs/c.1/strings/0x409/configuration
+
+    mkdir /dev/usb-ffs
+    chmod 0770 /dev/usb-ffs
+    chown shell:shell /dev/usb-ffs
+    mkdir /dev/usb-ffs/adb/
+    chmod 0770 /dev/usb-ffs/adb
+    chown shell:shell /dev/usb-ffs/adb
+
+    mount -t functionfs -o uid=2000,gid=2000 adb /dev/usb-ffs/adb
+
+    /apex/com.android.adbd/bin/adbd &
+
+    sleep 1
+    echo none > /config/usb_gadget/g1/UDC
+    ln -s /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/c.1/f1
+    ls /sys/class/udc |head -n 1 > /config/usb_gadget/g1/UDC
+
+    sleep 2
+    echo 2 > /sys/devices/virtual/android_usb/android0/port_mode
+fi
+
+vndk="$(getprop persist.sys.vndk)"
+[ -z "$vndk" ] && vndk="$(getprop ro.vndk.version |grep -oE '^[0-9]+')"
+
+if [ "$vndk" = 26 ];then
+	resetprop_phh ro.vndk.version 26
+fi
+
+setprop sys.usb.ffs.aio_compat true
+
+if getprop ro.vendor.build.fingerprint | grep -q -i -e Blackview/BV9500Plus;then
+    setprop persist.adb.nonblocking_ffs true
+else
+    setprop persist.adb.nonblocking_ffs false
+fi
+
+fixSPL() {
+    if [ "$(getprop ro.product.cpu.abi)" = "armeabi-v7a" ]; then
+        setprop ro.keymaster.mod 'AOSP on ARM32'
+    else
+        setprop ro.keymaster.mod 'AOSP on ARM64'
+    fi
+    img="$(find /dev/block -type l -iname kernel"$(getprop ro.boot.slot_suffix)" | grep by-name | head -n 1)"
+    [ -z "$img" ] && img="$(find /dev/block -type l -iname boot"$(getprop ro.boot.slot_suffix)" | grep by-name | head -n 1)"
+    if [ -n "$img" ]; then
+    #Rewrite SPL/Android version if needed
+    # Read Android version from vbmeta (often trustkernel's root of trust)
+    Arelease="$(strings -n 2 /dev/block/by-name/vbmeta* | grep -A1 com.android.build.system.os_version | grep -E '^[0-9]+$' | sort -n | head -n1)"
+    # Otherwise read it from boot.img
+    [ -z "$Arelease" ] && Arelease="$(getSPL "$img" android)"
+    spl="$(getSPL "$img" spl)"
+    setprop ro.keymaster.xxx.release "${Arelease}"
+    setprop ro.keymaster.xxx.security_patch "$spl"
+    if [ -z "$Arelease" ] || [ -z "$spl" ];then
+        return 0
+    fi
+    # Some devices will want true vbmeta_state and verifiedbootstate
+    # Setup those properties redirect for "keymaster" prop redirects
+    setprop ro.keymaster.xxx.vbmeta_state unlocked
+    setprop ro.keymaster.xxx.verifiedbootstate orange
+
+    if getprop ro.vendor.build.fingerprint |grep -q -i samsung/j6lte;then
+        setprop debug.phh
+===== phh-on-boot.sh (head)
+#!/system/bin/sh
+
+vndk="$(getprop persist.sys.vndk)"
+[ -z "$vndk" ] && vndk="$(getprop ro.vndk.version |grep -oE '^[0-9]+')"
+
+[ "$(getprop vold.decrypt)" = "trigger_restart_min_framework" ] && exit 0
+
+setprop ctl.start media.swcodec
+
+for i in wpa p2p;do
+	if [ ! -f /data/misc/wifi/${i}_supplicant.conf ];then
+		cp /vendor/etc/wifi/wpa_supplicant.conf /data/misc/wifi/${i}_supplicant.conf
+	fi
+	chmod 0660 /data/misc/wifi/${i}_supplicant.conf
+	chown wifi:system /data/misc/wifi/${i}_supplicant.conf
+done
+
+if [ -f /vendor/bin/mtkmal ];then
+    if [ "$(getprop persist.mtk_ims_support)" = 1 ] || [ "$(getprop persist.mtk_epdg_support)" = 1 ];then
+        setprop persist.mtk_ims_support 0
+        setprop persist.mtk_epdg_support 0
+        reboot
+    fi
+fi
+
+if grep -qF android.hardware.boot /vendor/manifest.xml || grep -qF android.hardware.boot /vendor/etc/vintf/manifest.xml ;then
+	bootctl mark-boot-successful
+fi
+
+setprop ctl.restart sec-light-hal-2-0
+if find /sys/firmware -name support_fod |grep -qE .;then
+	setprop ctl.restart vendor.fps_hal
+fi
+
+setprop ctl.stop storageproxyd
+
+sleep 10
+
+minijailSrc=/system/system_ext/apex/com.android.vndk.v28/lib/libminijail.so
+minijailSrc64=/system/system_ext/apex/com.android.vndk.v28/lib64/libminijail.so
+if [ "$vndk" = 27 ];then
+    mount $minijailSrc64 /vendor/lib64/libminijail_vendor.so
+    mount $minijailSrc /vendor/lib/libminijail_vendor.so
+fi
+
+if [ "$vndk" = 28 ];then
+    mount $minijailSrc64 /vendor/lib64/libminijail_vendor.so
+    mount $minijailSrc /vendor/lib/libminijail_vendor.so
+    mount $minijailSrc64 /system/lib64/vndk-28/libminijail.so
+    mount $minijailSrc /system/lib/vndk-28/libminijail.so
+    mount $minijailSrc64 /vendor/lib64/libminijail.so
+    mount $minijailSrc /vendor/lib/libminijail.so
+fi
+
+#Clear looping services
+sleep 30
+getprop | \
+    grep restarting | \
+    sed -nE -e 's/\[([^]]*).*/\1/g'  -e 's/init.svc.(.*)/\1/p' |
+    while read -r svc ;do
+        setprop ctl.stop "$svc"
+    done
+===== phh-on-data.sh (head)
+#!/system/bin/sh
+
+vndk="$(getprop persist.sys.vndk)"
+[ -z "$vndk" ] && vndk="$(getprop ro.vndk.version |grep -oE '^[0-9]+')"
+
+if getprop persist.sys.phh.no_vendor_overlay |grep -q true;then
+	for part in odm vendor;do
+		mount /mnt/phh/empty_dir/ /$part/overlay
+	done
+fi
+
+if getprop persist.sys.phh.caf.media_profile |grep -q true;then
+    setprop media.settings.xml "/vendor/etc/media_profiles_vendor.xml"
+fi
+
+
+minijailSrc=/system/system_ext/apex/com.android.vndk.v28/lib/libminijail.so
+minijailSrc64=/system/system_ext/apex/com.android.vndk.v28/lib64/libminijail.so
+if [ "$vndk" = 27 ];then
+    mount $minijailSrc64 /vendor/lib64/libminijail_vendor.so
+    mount $minijailSrc /vendor/lib/libminijail_vendor.so
+fi
+
+if [ "$vndk" = 28 ];then
+    mount $minijailSrc64 /vendor/lib64/libminijail_vendor.so
+    mount $minijailSrc /vendor/lib/libminijail_vendor.so
+    mount $minijailSrc64 /system/lib64/vndk-28/libminijail.so
+    mount $minijailSrc /system/lib/vndk-28/libminijail.so
+    mount $minijailSrc64 /vendor/lib64/libminijail.so
+    mount $minijailSrc /vendor/lib/libminijail.so
+fi
+===== rc mentioning phh
+m/system/etc/init/twrp.rc m/system/etc/init/evgrab.rc m/system/etc/init/su.rc m/system/etc/init/phh-remotectl.rc m/system/etc/init/oplus-alert-slider.rc m/system/etc/init/mtk-sms-fwk-ready.rc m/system/etc/init/vndk.rc m/system/etc/init/slsi-booted.rc m/system/etc/init/adbd.rc m/system/etc/init/phh-ota.rc 
+===== vndk.rc
+on post-fs
+    exec - root -- /system/bin/vndk-detect
+    exec - root -- /system/bin/rw-system.sh
+    mount none /system/etc/usb_audio_policy_configuration.xml /vendor/etc/usb_audio_policy_configuration.xml bind
+    setprop ro.vndk.version ${persist.sys.vndk}
+
+on property:vold.decrypt=trigger_restart_framework
+    exec - root -- /system/bin/phh-on-data.sh
+
+on early-boot
+    exec - root -- /system/bin/phh-on-data.sh
+
+service phh_on_boot /system/bin/phh-on-boot.sh
+    oneshot
+    disabled
+
+on property:sys.boot_completed=1
+    start phh_on_boot
+    chown wifi system /data/misc/wifi
+    chown system wifi /data/misc/wifi/hostapd.conf
+
+on property:persist.sys.phh.mainkeys=*
+    setprop qemu.hw.mainkeys ${persist.sys.phh.mainkeys}
+
+on property:persist.sys.phh.asus.dt2w=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.asus.dt2w"
+
+on property:persist.sys.phh.asus.usb.port=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.asus.usb.port"
+
+on property:persist.sys.phh.oppo.dt2w=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.oppo.dt2w"
+
+on property:persist.sys.phh.oppo.gaming_mode=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.oppo.gaming_mode"
+
+on property:persist.sys.phh.oppo.usbotg=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.oppo.usbotg"
+
+on property:persist.sys.phh.transsion.usbotg=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.transsion.usbotg"
+
+on property:persist.sys.phh.transsion.dt2w=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.transsion.dt2w"
+
+on property:persist.sys.phh.xiaomi.dt2w=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.xiaomi.dt2w"
+
+on property:persist.sys.phh.allow_binder_thread_on_incoming_calls=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.allow_binder_thread_on_incoming_calls"
+
+on property:persist.sys.phh.disable_audio_effects=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.disable_audio_effects"
+
+on property:persist.sys.phh.caf.audio_policy=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.caf.audio_policy"
+
+on property:persist.sys.phh.vsmart.dt2w=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.vsmart.dt2w"
+
+on property:persist.sys.phh.backlight.scale=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.backlight.scale"
+
+on property:persist.sys.phh.disable_soundvolume_effect=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.sys.phh.disable_soundvolume_effect"
+
+on property:ro.sf.lcd_density=*
+    restart surfaceflinger
+
+on property:persist.bluetooth.system_audio_hal.enabled=*
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-prop-handler.sh "persist.bluetooth.system_audio_hal.enabled"
+
+on property:init.svc.ril-proxy=stopped && property:persist.sys.phh.restart_ril=true
+    start ril-proxy
+
+on property:init.svc.vendor.ril-daemon-mtk=stopped && property:persist.sys.phh.restart_ril=true
+    start vendor.ril-daemon-mtk
+
+on property:persist.sys.phh.restart_ril=true
+    restart ril-proxy
+    restart vendor.qcrild
+    restart vendor.qcrild2
+    restart vendor.ril-daemon-mtk
+
+on property:vendor.debug.sf.latch_unsignaled=1
+    setprop debug.sf.latch_unsignaled 1
+
+on property:sys.phh.uninstall-ota=true
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/rm /metadata/phh/img
+
+on property:ro.vendor.radio.default_network=*
+    setprop ro.telephony.default_network ${ro.vendor.radio.default_network}
+
+on property:persist.sys.phh.force_display_5g=1
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/resetprop_phh ro.telephony.default_network 33,33
+
+on property:persist.sys.phh.ims.floss=true
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/resetprop_phh ro.telephony.iwlan_operation_mode AP-assisted
+
+on property:persist.sys.phh.enable_sf_gl_backpressure=*
+    setprop debug.sf.enable_gl_backpressure ${persist.sys.phh.enable_sf_gl_backpressure}
+
+on property:persist.sys.phh.dynamic_fps=*
+    setprop ro.surface_flinger.use_content_detection_for_refresh_rate ${persist.sys.phh.dynamic_fps}
+
+# Set watchdog timer to 30 seconds and pet it every 10 seconds to get a 20 second margin
+service watchdogd-gsi /system/bin/watchdogd 10 20
+    class core
+    oneshot
+    seclabel u:r:watchdogd:s0
+
+on property:persist.sys.phh.adb_secure=1
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/resetprop_phh ro.adb.secure 1
+    restart adbd
+===== webview config
+E: webviewproviders (line=17)
+    E: webviewprovider (line=19)
+      A: availableByDefault=true
+      A: description="Android WebView" (Raw: "Android WebView")
+      A: packageName="com.android.webview" (Raw: "com.android.webview")
+===== webview apks
+m/system/etc/permissions/android.software.webview.xml m/system/product/app/webview m/system/product/app/webview/webview.apk m/system/lib/libwebviewchromium_loader.so m/system/lib/libwebviewchromium_plat_support.so m/system/lib64/libwebviewchromium_loader.so m/system/lib64/libwebviewchromium_plat_support.so 
+===== update_engine
+-rwxr-xr-x. 1 root 2000 3064128 Apr 14  2025 m/system/bin/update_engine
+-rwxr-xr-x. 1 root 2000  153888 Apr 14  2025 m/system/bin/update_verifier
+ls: cannot access 'm/system/etc/update_engine': No such file or directory
+cacerts
+fsverity
+otacerts.zip
+===== otacerts / update key
+ls: cannot access 'm/system/etc/update_engine/update-payload-key.pub.pem': No such file or directory
+-rw-r--r--. 1 root root 1089 Apr 14  2025 m/system/etc/security/otacerts.zip
+===== phh-ota strings
+/system/bin/linker64
+Android
+strcmp
+fprintf
+unlink
+setxattr
+strlen
+getenv
+fwrite
+stderr
+memcpy
+memmove
+Unmapping backing image returned %s
+blockdev is %s
+delete-other-slot
+system_otaphh_a
+u:object_r:phhota_dev:s0
+/metadata/phh/img
+system_otaphh_
+length_error was thrown in -fno-exceptions mode with message "%s"
+/metadata/phh
+switch-slot
+blockDev wasn't block dev
+PHH_OTA_SLOT
+security.selinux
+/data/gsi/phh
+Creating system image succeeded
+/metadata/gsi/phh
+system_otaphh_b
+Deleting backing image returned %s
+basic_string
+new-slot
+Creating system image failed
+Mapping backing image returned %s
+/dev/phh-ota
+.note.android.ident
+.got.plt
+.rela.plt
+.dynstr
+.eh_frame_hdr
+.gnu.version_r
+.interp
+.relr.dyn
+.rela.dyn
+.gnu.version
+.dynsym
+.gnu.hash
+.relro_padding
+.eh_frame
+.note.gnu.build-id
+.dynamic
+.shstrtab
+.tdata
+.rodata
+.gnu_debugdata
+===== phhsu_daemon in sepolicy
+m/system/system_ext/etc/selinux/system_ext_sepolicy.cil
+(typeattributeset domain (adbd aidl_lazy_test_server apexd app_zygote artd atrace audioserver blkid blkid_untrusted bluetooth bootanim bootstat bpfloader bufferhubd cameraserver charger charger_vendor crash_dump credstore dhcp dnsmasq drmserver dumpstate e2fs ephemeral_app evsmanagerd extra_free_kbytes fastbootd fingerprintd flags_health_check fsck fsck_untrusted gatekeeperd gmscore_app gpuservice healthd heapprofd hwservicemanager idmap incident incident_helper incidentd init inputflinger installd isolated_app isolated_compute_app kernel keystore llkd lmkd logd logpersist mdnsd mediadrmserver mediaextractor mediametrics mediaprovider mediaserver mediaswcodec mediatranscoding modprobe mtp netd netutils_wrapper network_stack nfc otapreopt_chroot perfetto performanced platform_app postinstall ppp priv_app prng_seeder profman radio recovery recovery_persist recovery_refresh rkpdapp rs rss_hwm_reset runas runas_app sdcardd secure_element servicemanager sgdisk shared_relro shell simpleperf simpleperf_app_runner slideshow statsd su surfaceflinger system_app system_server tee tombstoned toolbox traced traced_perf traced_probes traceur_app ueventd uncrypt untrusted_app untrusted_app_32 untrusted_app_30 untrusted_app_29 untrusted_app_27 untrusted_app_25 update_engine update_verifier usbd vdc vendor_init vendor_misc_writer vendor_modprobe vendor_shell virtual_touchpad vndservicemanager vold vold_prepare_subdirs watchdogd webview_zygote wificond zygote aconfigd aconfigd_mainline adbd_tradeinmode apex_test_prepostinstall apexd_derive_classpath art_boot art_exec auditctl automotive_display_service bert_collector blank_screen boringssl_self_test vendor_boringssl_self_test canhalconfigurator clatd compos_fd_server compos_verify composd cppreopts crosvm derive_classpath derive_sdk device_as_webcam dex2oat dexopt_chroot_setup dmesgd fsverity_init fuseblkd fuseblkd_untrusted fwk_bufferhub gki_apex_prepostinstall gsid hal_allocator_default hal_keymint_system hidl_lazy_test_server iw kcmdlinectrl linkerconfig linux_vm_setup lpdumpd mediaprovider_app mediatuner migrate_legacy_obb_data misctrl mm_events mmd mtectrl odrefresh odsign ot_ctl ot_daemon otapreopt_slot permissioncontroller_app postinstall_dexopt prefetch preloads_copy preopt2cachename profcollectd remount rkp_cert_processor rkpd sdk_sandbox_34 sdk_sandbox_audit sdk_sandbox_next simpleperf_boot snapshotctl snapuserd stats storaged system_server_startup system_suspend trace_redactor tradeinmode uprobestats vehicle_binding_util vfio_handler virtual_camera virtual_face virtual_fingerprint virtualizationmanager virtualizationservice vmlauncher_app vmnic vzwomatrigger_app wait_for_keymaster wifi_mainline_supplicant hal_fingerprint_oppo_compat hal_fingerprint_oppo hal_aguiledbelt hal_audio_sysbta hostapd oeminfo_nvm hal_graphics_allocator_default mtk_hal_audio mtk_hal_power tkcore hal_fingerprint_oplus qcrilam_app rild hal_graphics_composer_default phhsu_daemon hal_fingerprint_default hal_tp_default hal_gesturewake_default hal_aidl_agolddaemon_default vndk_detect vendor_sysfs_displayfeature ))
+(typeattributeset file_type (adbd_exec aidl_lazy_test_server_exec apexd_exec appdomain_tmpfs app_zygote_tmpfs audioserver_tmpfs bootanim_exec bootstat_exec bufferhubd_exec cameraserver_exec cameraserver_tmpfs charger_exec crash_dump_exec credstore_exec dhcp_exec dnsmasq_exec drmserver_exec drmserver_socket dumpstate_exec e2fs_exec extra_free_kbytes_exec unlabeled system_file system_asan_options_file system_event_log_tags_file system_lib_file system_bootstrap_lib_file system_group_file system_linker_exec system_linker_config_file system_passwd_file system_seccomp_policy_file system_security_cacerts_file tcpdump_exec system_zoneinfo_file cgroup_desc_file cgroup_desc_api_file vendor_cgroup_desc_file task_profiles_file task_profiles_api_file vendor_task_profiles_file art_apex_dir linkerconfig_file incremental_control_file bootanim_oem_file vendor_hal_file vendor_file vendor_app_file vendor_configs_file same_process_hal_file vndk_sp_file vendor_framework_file vendor_overlay_file vendor_public_lib_file vendor_public_framework_file vendor_microdroid_file vendor_keylayout_file vendor_keychars_file vendor_idc_file vendor_uuid_mapping_config_file vendor_vm_file vendor_vm_data_file metadata_file vold_metadata_file gsi_metadata_file gsi_public_metadata_file password_slot_metadata_file apex_metadata_file ota_metadata_file metadata_bootstat_file userspace_reboot_metadata_file staged_install_file watchdog_metadata_file repair_mode_metadata_file aconfig_storage_metadata_file aconfig_storage_flags_metadata_file dev_cpu_variant runtime_event_log_tags_file logcat_exec cgroup_rc_file coredump_file system_data_root_file system_data_file system_userdir_file packages_list_file game_mode_intervention_list_file vendor_data_file vendor_userdir_file unencrypted_data_file install_data_file drm_data_file adb_data_file anr_data_file tombstone_data_file tombstone_wifi_data_file apex_data_file apk_data_file apk_tmp_file apk_private_data_file apk_private_tmp_file dalvikcache_data_file ota_data_file ota_package_file user_profile_root_file user_profile_data_file profman_dump_data_file prereboot_data_file resourcecache_data_file shell_data_file property_data_file bootchart_data_file dropbox_data_file heapdump_data_file nativetest_data_file shell_test_data_file ringtone_file preloads_data_file preloads_media_file dhcp_data_file server_configurable_flags_data_file staging_data_file vendor_apex_file vendor_apex_metadata_file shutdown_checkpoints_system_data_file mnt_media_rw_file mnt_user_file mnt_pass_through_file mnt_expand_file mnt_sdcard_file storage_file mnt_media_rw_stub_file storage_stub_file mnt_vendor_file mnt_product_file apex_mnt_dir apex_info_file postinstall_mnt_dir postinstall_file postinstall_apex_mnt_dir mirror_data_file adb_keys_file apex_system_server_data_file apex_module_data_file apex_ota_reserved_file apex_rollback_data_file appcompat_data_file audio_data_file audioserver_data_file bluetooth_data_file bluetooth_logs_data_file bootstat_data_file boottrace_data_file camera_data_file credstore_data_file gatekeeper_data_file incident_data_file keychain_data_file keystore_data_file media_data_file media_rw_data_file media_userdir_file misc_user_data_file net_data_file network_watchlist_data_file nfc_data_file nfc_logs_data_file radio_data_file recovery_data_file shared_relro_file snapshotctl_log_data_file stats_config_data_file stats_data_file systemkeys_data_file textclassifier_data_file trace_data_file vpn_data_file wifi_data_file vold_data_file tee_data_file update_engine_data_file update_engine_log_data_file snapuserd_log_data_file method_trace_data_file gsi_data_file radio_core_data_file app_data_file privapp_data_file system_app_data_file cache_file overlayfs_file cache_backup_file cache_private_backup_file cache_recovery_file efs_file wallpaper_file shortcut_manager_icons icon_file asec_apk_file asec_public_file asec_image_file backup_data_file bluetooth_efs_file fingerprintd_data_file fingerprint_vendor_data_file app_fuse_file face_vendor_data_file iris_vendor_data_file adbd_socket bluetooth_socket dnsproxyd_socket dumpstate_socket fwmarkd_socket lmkd_socket logd_socket logdr_socket logdw_socket mdns_socket mdnsd_socket misc_logd_file mtpd_socket ot_daemon_socket property_socket racoon_socket recovery_socket rild_socket rild_debug_socket snapuserd_socket snapuserd_proxy_socket statsdw_socket system_wpa_socket system_ndebug_socket system_unsolzygote_socket tombstoned_crash_socket tombstoned_java_trace_socket tombstoned_intercept_socket traced_consumer_socket traced_perf_socket traced_producer_socket uncrypt_socket wpa_socket zygote_socket heapprofd_socket gps_control pdx_display_dir pdx_performance_dir pdx_bufferhub_dir pdx_display_client_endpoint_socket pdx_display_manager_endpoint_socket pdx_display_screenshot_endpoint_socket pdx_display_vsync_endpoint_socket pdx_performance_client_endpoint_socket pdx_bufferhub_client_endpoint_socket file_contexts_file mac_perms_file property_contexts_file seapp_contexts_file sepolicy_file service_contexts_file keystore2_key_contexts_file vendor_service_contexts_file hwservice_contexts_file vndservice_contexts_file vendor_kernel_modules system_dlkm_file audiohal_data_file fingerprintd_exec flags_health_check_exec fsck_exec gatekeeperd_exec hal_graphics_composer_server_tmpfs hwservicemanager_exec idmap_exec init_exec init_tmpfs inputflinger_exec installd_exec keystore_exec llkd_exec lmkd_exec logd_exec mediadrmserver_exec mediaextractor_exec mediaextractor_tmpfs mediametrics_exec mediaserver_exec mediaserver_tmpfs mediaswcodec_exec netd_exec netutils_wrapper_exec performanced_exec profman_exec recovery_persist_exec recovery_refresh_exec rs_exec runas_exec sdcardd_exec servicemanager_exec sgdisk_exec shell_exec simpleperf_app_runner_exec statsd_exec su_exec surfaceflinger_tmpfs system_server_tmpfs tombstoned_exec toolbox_exec traced_tmpfs ueventd_tmpfs uncrypt_exec update_engine_exec update_verifier_exec usbd_exec vdc_exec vendor_misc_writer_exec vendor_shell_exec vendor_toolbox_exec virtual_touchpad_exec vold_exec vold_prepare_subdirs_exec watchdogd_exec webview_zygote_exec webview_zygote_tmpfs wificond_exec zygote_tmpfs zygote_exec aconfigd_exec aconfigd_mainline_exec apex_test_prepostinstall_exec art_boot_exec art_exec_exec artd_exec artd_tmpfs atrace_exec audioserver_exec auditctl_exec automotive_display_service_exec bert_collector_exec blank_screen_exec blkid_exec boringssl_self_test_exec vendor_boringssl_self_test_exec boringssl_self_test_marker bpfloader_exec canhalconfigurator_exec clatd_exec compos_verify_exec composd_exec cppreopts_exec crosvm_exec crosvm_tmpfs derive_classpath_exec derive_sdk_exec dex2oat_exec dexopt_chroot_setup_exec dexopt_chroot_setup_tmpfs dexoptanalyzer_exec dmesgd_exec dumpstate_tmpfs evsmanagerd_exec storaged_data_file wm_trace_data_file accessibility_trace_data_file perfetto_traces_data_file perfetto_traces_bugreport_data_file perfetto_traces_profiling_data_file perfetto_configs_data_file system_perfetto_config_file uprobestats_configs_data_file oatdump_exec sdk_sandbox_system_data_file sdk_sandbox_data_file app_exec_data_file rollback_data_file checkin_data_file ota_image_data_file gsi_persistent_data_file emergency_data_file profcollectd_data_file apex_art_data_file apex_art_staging_data_file apex_compos_data_file apex_virt_data_file apex_tethering_data_file apex_uwb_data_file apex_appsearch_data_file apex_permission_data_file apex_scheduling_data_file apex_wifi_data_file font_data_file dmesgd_data_file odrefresh_data_file odsign_data_file odsign_metrics_file virtualizationservice_data_file vm_data_file environ_system_data_file bootanim_data_file fd_server_exec compos_exec compos_key_helper_exec prng_seeder_socket system_font_fallback_file aconfigd_socket aconfigd_mainline_socket system_aconfig_storage_file vendor_aconfig_storage_file connectivityblob_data_file mainline_supplicant_data_file pre_reboot_dexopt_file pre_reboot_dexopt_artd_file apk_metadata_file storage_area_app_dir storage_area_dir storage_area_content_file storage_area_key_file tradeinmode_metadata_file prefetch_metadata_file vendor_boot_ota_file tee_service_contexts_file fsverity_init_exec fuseblkd_exec fuseblkd_untrusted_exec fwk_bufferhub_exec gki_apex_prepostinstall_exec gpuservice_exec gsid_exec hal_allocator_default_exec hal_keymint_system_exec heapprofd_exec heapprofd_tmpfs hidl_lazy_test_server_exec incident_exec incident_helper_exec incidentd_exec iw_exec kcmdlinectrl_exec linkerconfig_exec linux_vm_setup_exec lpdumpd_exec mdnsd_exec mediatranscoding_exec mediatranscoding_tmpfs mediatuner_exec migrate_legacy_obb_data_exec misctrl_exec mm_events_exec mmd_exec mtectrl_exec odrefresh_exec odsign_exec ot_ctl_exec ot_daemon_exec otapreopt_chroot_exec otapreopt_slot_exec perfetto_exec perfetto_tmpfs postinstall_exec postinstall_dexopt_exec postinstall_dexopt_tmpfs prefetch_exec preloads_copy_exec preopt2cachename_exec prng_seeder_exec profcollectd_exec remount_exec rkp_cert_processor_exec rkpd_exec rss_hwm_reset_exec simpleperf_exec simpleperf_boot_data_file snapshotctl_exec snapuserd_exec stats_exec storaged_exec surfaceflinger_exec system_server_startup_tmpfs system_suspend_exec trace_redactor_exec traced_exec traced_perf_exec traced_probes_exec traced_probes_tmpfs tradeinmode_exec uprobestats_exec vehicle_binding_util_exec vfio_handler_exec virtual_camera_exec virtual_face_exec virtual_fingerprint_exec virtualizationmanager_exec virtualizationservice_exec vmnic_exec wait_for_keymaster_exec wifi_mainline_supplicant_exec asus_motor_device vendor_sysfs_graphics hal_fingerprint_oppo_compat_exec hal_audio_sysbta_exec teecd_data_file dmd_device oeminfo_nvm_device sys_block_sdd sys_block_mmcblk0 sysfs_tp proc_ged sensitivity_sysfs sysfs_usb_supply bt_firmware_file rpmb_device sysfs_vnswap sysfs_ski_display_writable phhsu_exec phhsu_daemon_tmpfs vndk_detect_exec ))
+(typeattributeset mlstrustedsubject (adbd artd bluetooth bufferhubd drmserver dumpstate pdx_display_client_endpoint_socket pdx_display_manager_endpoint_socket pdx_display_screenshot_endpoint_socket pdx_display_vsync_endpoint_socket pdx_performance_client_endpoint_socket pdx_bufferhub_client_endpoint_socket heapprofd hwservicemanager incidentd init installd kernel keystore llkd lmkd logd mdnsd mediadrmserver mediaextractor mediaserver netd network_stack nfc performanced prng_seeder radio rss_hwm_reset runas servicemanager shell simpleperf_app_runner statsd su surfaceflinger system_app system_server tombstoned traced traced_perf traced_probes uncrypt vendor_init vold vold_prepare_subdirs webview_zygote zygote aconfigd aconfigd_mainline cppreopts device_as_webcam otapreopt_slot postinstall_dexopt profcollectd simpleperf_boot storaged virtualizationservice phhsu_daemon ))
+(typeattributeset mlstrustedobject (ashmem_device ashmem_libcutils_device binder_device hwbinder_device pmsg_device gpu_device mtp_device ptmx_device kmsg_device null_device random_device owntty_device zero_device fuse_device ion_device dmabuf_heap_device dmabuf_system_heap_device dmabuf_system_secure_heap_device uhid_device tun_device usbaccessory_device usb_device proc_qtaguid_ctrl proc_qtaguid_stat selinuxfs cgroup sysfs sysfs_bluetooth_writable sysfs_kernel_notes sysfs_nfc_power_writable sysfs_vendor_sched inotify devpts fuse fuseblk sdcardfs vfat exfat debugfs_trace_marker debugfs_tracing debugfs_tracing_debug functionfs anr_data_file tombstone_data_file apk_tmp_file apk_private_tmp_file ota_package_file user_profile_data_file shell_data_file heapdump_data_file ringtone_file media_rw_data_file radio_data_file shared_relro_file trace_data_file method_trace_data_file system_app_data_file cache_file cache_backup_file cache_recovery_file wallpaper_file shortcut_manager_icons asec_apk_file backup_data_file app_fuse_file dnsproxyd_socket fwmarkd_socket logd_socket logdr_socket logdw_socket mdnsd_socket property_socket statsdw_socket system_ndebug_socket system_unsolzygote_socket tombstoned_crash_socket tombstoned_java_trace_socket traced_consumer_socket traced_perf_socket traced_producer_socket heapprofd_socket pdx_display_client_endpoint_socket pdx_display_manager_endpoint_socket pdx_display_screenshot_endpoint_socket pdx_display_vsync_endpoint_socket pdx_performance_client_endpoint_socket pdx_bufferhub_client_endpoint_socket system_server_tmpfs traced_tmpfs wm_trace_data_file virtualizationservice_data_file kvm_device prng_seeder_socket aconfigd_socket aconfigd_mainline_socket heapprofd_tmpfs phhota_dev phhsu_daemon vendor_sysfs_displayfeature ))
+(typeattributeset netdomain (adbd bluetooth dhcp dnsmasq drmserver dumpstate ephemeral_app gmscore_app mdnsd mediadrmserver mediaprovider mediaserver netd network_stack nfc platform_app priv_app radio rkpdapp runas_app shell su system_app system_server untrusted_app untrusted_app_32 untrusted_app_30 untrusted_app_29 untrusted_app_27 untrusted_app_25 update_engine adbd_tradeinmode clatd ot_daemon rkp_cert_processor sdk_sandbox_34 sdk_sandbox_audit sdk_sandbox_next vmlauncher_app phhsu_daemon ))
+(typeattributeset coredomain (adbd aidl_lazy_test_server apexd app_zygote artd atrace audioserver blkid blkid_untrusted bluetooth bootanim bootstat bpfloader bufferhubd cameraserver charger crash_dump credstore dhcp dnsmasq drmserver dumpstate e2fs ephemeral_app evsmanagerd extra_free_kbytes fastbootd fingerprintd flags_health_check fsck fsck_untrusted gatekeeperd gmscore_app gpuservice healthd heapprofd hwservicemanager idmap incident incident_helper incidentd init inputflinger installd isolated_app isolated_compute_app kernel keystore llkd lmkd logd logpersist mdnsd mediadrmserver mediaextractor mediametrics mediaprovider mediaserver mediaswcodec mediatranscoding modprobe netd netutils_wrapper network_stack nfc otapreopt_chroot perfetto performanced platform_app postinstall priv_app prng_seeder profman radio recovery recovery_persist recovery_refresh rkpdapp rs rss_hwm_reset runas runas_app sdcardd secure_element servicemanager sgdisk shared_relro shell simpleperf simpleperf_app_runner slideshow statsd su surfaceflinger system_app system_server tombstoned toolbox traced traced_perf traced_probes traceur_app ueventd uncrypt untrusted_app untrusted_app_32 untrusted_app_30 untrusted_app_29 untrusted_app_27 untrusted_app_25 update_engine update_verifier usbd vdc virtual_touchpad vold vold_prepare_subdirs watchdogd webview_zygote wificond zygote aconfigd aconfigd_mainline adbd_tradeinmode apex_test_prepostinstall apexd_derive_classpath art_boot art_exec auditctl automotive_display_service bert_collector blank_screen boringssl_self_test canhalconfigurator clatd compos_fd_server compos_verify composd cppreopts crosvm derive_classpath derive_sdk device_as_webcam dex2oat dexopt_chroot_setup dmesgd fsverity_init fuseblkd fuseblkd_untrusted fwk_bufferhub gki_apex_prepostinstall gsid hal_allocator_default hal_keymint_system hidl_lazy_test_server iw kcmdlinectrl linkerconfig linux_vm_setup lpdumpd mediaprovider_app mediatuner migrate_legacy_obb_data misctrl mm_events mmd mtectrl odrefresh odsign ot_ctl ot_daemon otapreopt_slot permissioncontroller_app postinstall_dexopt prefetch preloads_copy preopt2cachename profcollectd remount rkp_cert_processor rkpd sdk_sandbox_34 sdk_sandbox_audit sdk_sandbox_next simpleperf_boot snapshotctl snapuserd stats storaged system_server_startup system_suspend trace_redactor tradeinmode uprobestats vehicle_binding_util vfio_handler virtual_camera virtual_face virtual_fingerprint virtualizationmanager virtualizationservice vmlauncher_app vmnic wait_for_keymaster wifi_mainline_supplicant hal_audio_sysbta phhsu_daemon vndk_detect ))
+(type phhsu_daemon)
+(roletype object_r phhsu_daemon)
+(typepermissive phhsu_daemon)
+(type phhsu_daemon_tmpfs)
+(roletype object_r phhsu_daemon_tmpfs)
+(allow phhsu_daemon phhota_dev (blk_file (ioctl read write getattr lock append map open watch watch_reads)))
+(allow kernel phhsu_daemon (fd (use)))
+(allow phhsu_daemon gsi_data_file (file (ioctl)))
+(allowx phhsu_daemon gsi_data_file (ioctl file (0x660b)))
+(allow phhsu_daemon loop_device (blk_file (ioctl)))
+(allowx phhsu_daemon loop_device (ioctl blk_file (0x4c00)))
+(allow phhsu_daemon userdata_block_device (blk_file (ioctl)))
+(allowx phhsu_daemon userdata_block_device (ioctl blk_file (0x1278 0x127a)))
+(typetransition phhsu_daemon tmpfs file phhsu_daemon_tmpfs)
+(allow phhsu_daemon phhsu_daemon_tmpfs (file (read write getattr map)))
+(allow init phhsu_daemon (process (transition)))
+(allow phhsu_daemon phhsu_exec (file (read getattr map execute open entrypoint)))
+(dontaudit init phhsu_daemon (process (noatsecure)))
+(allow init phhsu_daemon (process (siginh rlimitinh)))
+(typetransition init phhsu_exec process phhsu_daemon)
+(allow phhsu_daemon device (dir (ioctl read write getattr lock open watch watch_reads add_name search)))
+(allow phhsu_daemon phhsu_daemon (file (ioctl read write create getattr setattr lock append map unlink rename open watch watch_reads)))
+(allow phhsu_daemon phhsu_daemon (lnk_file (ioctl read write create getattr setattr lock append map unlink rename open watch watch_reads)))
+(allow phhsu_daemon phhsu_daemon (sock_file (ioctl read write create getattr setattr lock append map unlink rename open watch watch_reads)))
+(allow phhsu_daemon phhsu_daemon (fifo_file (ioctl read write create getattr setattr lock append map unlink rename open watch watch_reads)))
+(allow phhsu_daemon phhsu_daemon (dir (ioctl read write create getattr setattr lock rename open watch watch_reads add_name remove_name reparent search rmdir)))
+(typetransition phhsu_daemon device dir phhsu_daemon)
+(typetransition phhsu_daemon device fifo_file phhsu_daemon)
+(typetransition phhsu_daemon device sock_file phhsu_daemon)
+(typetransition phhsu_daemon device lnk_file phhsu_daemon)
+(typetransition phhsu_daemon device file phhsu_daemon)
+(allow appdomain phhsu_daemon (unix_stream_socket (read write connectto)))
+(allow shell phhsu_daemon (unix_stream_socket (read write connectto)))
+(allow appdomain phhsu_daemon (sock_file (read write)))
+===== selinux files
+m/system/etc/selinux:
+total 2636
+drwxr-xr-x.  3 root root    4096 Apr 14  2025 .
+drwxr-xr-x. 18 root root    4096 Apr 14  2025 ..
+-rw-r--r--.  1 root root    1481 Apr 14  2025 bug_map
+drwxr-xr-x.  2 root root    4096 Apr 14  2025 mapping
+-rw-r--r--.  1 root root   48347 Apr 14  2025 plat_file_contexts
+-rw-r--r--.  1 root root    8750 Apr 14  2025 plat_hwservice_contexts
+-rw-r--r--.  1 root root    2184 Apr 14  2025 plat_keystore2_key_contexts
+-rw-r--r--.  1 root root   16506 Apr 14  2025 plat_mac_permissions.xml
+-rw-r--r--.  1 root root  116816 Apr 14  2025 plat_property_contexts
+-rw-r--r--.  1 root root    4503 Apr 14  2025 plat_seapp_contexts
+-rw-r--r--.  1 root root 2412960 Apr 14  2025 plat_sepolicy.cil
+-rw-r--r--.  1 root root      65 Apr 14  2025 plat_sepolicy_and_mapping.sha256
+-rw-r--r--.  1 root root      65 Apr 14  2025 plat_sepolicy_genfs_202504.cil
+-rw-r--r--.  1 root root   41111 Apr 14  2025 plat_service_contexts
+
+m/system/product/etc/selinux:
+total 32
+drwxr-xr-x. 3 root root 4096 Apr 14  2025 .
+drwxr-xr-x. 6 root root 4096 Apr 14  2025 ..
+drwxr-xr-x. 2 root root 4096 Apr 14  2025 mapping
+-rw-r--r--. 1 root root    0 Apr 14  2025 product_file_contexts
+-rw-r--r--. 1 root root    0 Apr 14  2025 product_hwservice_contexts
+-rw-r--r--. 1 root root  936 Apr 14  2025 product_keystore2_key_contexts
+-rw-r--r--. 1 root root  101 Apr 14  2025 product_mac_permissions.xml
+-rw-r--r--. 1 root root  931 Apr 14  2025 product_property_contexts
+-rw-r--r--. 1 root root    0 Apr 14  2025 product_seapp_contexts
+-rw-r--r--. 1 root root    1 Apr 14  2025 product_sepolicy.cil
+-rw-r--r--. 1 root root   65 Apr 14  2025 product_sepolicy_and_mapping.sha256
+-rw-r--r--. 1 root root    0 Apr 14  2025 product_service_contexts
+
+m/system/system_ext/etc/selinux:
+total 132
+drwxr-xr-x. 3 root root  4096 Apr 14  2025 .
+drwxr-xr-x. 8 root root  4096 Apr 14  2025 ..
+-rw-r--r--. 1 root root     0 Apr 14  2025 bug_map
+drwxr-xr-x. 2 root root  4096 Apr 14  2025 mapping
+-rw-r--r--. 1 root root  1039 Apr 14  2025 system_ext_file_contexts
+-rw-r--r--. 1 root root     0 Apr 14  2025 system_ext_hwservice_contexts
+-rw-r--r--. 1 root root   939 Apr 14  2025 system_ext_keystore2_key_contexts
+-rw-r--r--. 1 root root   101 Apr 14  2025 system_ext_mac_permissions.xml
+-rw-r--r--. 1 root root  1235 Apr 14  2025 system_ext_property_contexts
+-rw-r--r--. 1 root root    84 Apr 14  2025 system_ext_seapp_contexts
+-rw-r--r--. 1 root root 90135 Apr 14  2025 system_ext_sepolicy.cil
+-rw-r--r--. 1 root root    65 Apr 14  2025 system_ext_sepolicy_and_mapping.sha256
+-rw-r--r--. 1 root root   753 Apr 14  2025 system_ext_service_contexts
+===== labels of phh files
+/home/runner/work/_temp/1667b62f-dfcd-480e-861a-4fb070f3228b.sh: line 19: getfattr: command not found
+===== ota props
+ro.product.ab_ota_partitions=system
+===== treble app
+m/system/priv-app/TrebleApp
+m/system/priv-app/TrebleApp/TrebleApp.apk
+m/system/priv-app/TrebleApp/oat
+m/system/priv-app/TrebleApp/oat/arm64
+m/system/priv-app/TrebleApp/oat/arm64/TrebleApp.vdex
+m/system/priv-app/TrebleApp/oat/arm64/TrebleApp.odex
+TrebleApp
+===== permissive domains
+(typepermissive su)
+(typepermissive ueventd)
+(typepermissive tkcore)
+(typepermissive phhsu_daemon)
+===== phh-ota.rc
+service phh-ota-make /system/bin/phh-ota new-slot
+	seclabel u:r:phhsu_daemon:s0
+	disabled
+	oneshot
+
+service phh-ota-switch /system/bin/phh-ota switch-slot
+	seclabel u:r:phhsu_daemon:s0
+	disabled
+	oneshot
+
+on property:sys.boot_completed=1
+    exec u:r:phhsu_daemon:s0 root -- /system/bin/phh-ota delete-other-slot
+===== update_engine rc
+# LINT.IfChange
+service update_engine /system/bin/update_engine --logtostderr --logtofile --foreground
+    class late_start
+    user root
+    group root system wakelock inet cache media_rw
+    task_profiles OtaProfiles
+    disabled
+
+on property:ro.boot.slot_suffix=*
+    enable update_engine
+# LINT.ThenChange(update_engine_nostats.rc)
+===== usb in rc
+on property:sys.usb.config=none && property:sys.usb.configfs=1
+    setprop sys.usb.ffs.ready 0
+    setprop sys.usb.state ${sys.usb.config}
+    setprop sys.usb.ffs.ready 0
+on property:sys.usb.config=adb && property:sys.usb.configfs=1
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=adb && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=mtp && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=mtp,adb && property:sys.usb.configfs=1
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=mtp,adb && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=ptp && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=ptp,adb && property:sys.usb.configfs=1
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=ptp,adb && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=accessory && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=accessory,adb && property:sys.usb.configfs=1
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=accessory,adb && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=audio_source && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=audio_source,adb && property:sys.usb.configfs=1
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=audio_source,adb && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=accessory,audio_source && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+on property:sys.usb.config=accessory,audio_source,adb && property:sys.usb.configfs=1
+===== props (adb/usb/webview/ota)
+ro.product.ab_ota_partitions=system
+# GSI always disables adb authentication
+ro.adb.secure=0
+===== phh treble app
+m/system/etc/permissions/privapp-permissions-me.phh.treble.app.xml
+m/system/etc/sysconfig/sysconfig-me.phh.treble.app.xml
+m/system/priv-app/TrebleApp
+m/system/priv-app/TrebleApp/TrebleApp.apk
+m/system/priv-app/TrebleApp/oat/arm64/TrebleApp.vdex
+m/system/priv-app/TrebleApp/oat/arm64/TrebleApp.odex
+TrebleApp
