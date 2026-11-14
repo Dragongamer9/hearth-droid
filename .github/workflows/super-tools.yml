@@ -23,6 +23,9 @@ jobs:
     timeout-minutes: 30
     # The tools' AOSP source is from 2021: it builds with that era's compiler and C++ headers (Ubuntu 20.04).
     container: ubuntu:20.04
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
     steps:
       - name: Build tools
         run: |
@@ -31,6 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Android's super tools
         run: |
+          trap 'echo "::error title=Super tools step::line $LINENO: $BASH_COMMAND (exit $?)"' ERR
           git init -q lp && cd lp
           git fetch -q --depth 1 "$LP_REPO" "$LP_COMMIT" && git checkout -q FETCH_HEAD
           bash make.sh > ../lp-build.log 2>&1 || { echo "::error title=Super tools::$(grep -E -B2 -A3 'error:|Error ' ../lp-build.log | head -40 | tr '\n' '|' | cut -c1-3500)"; exit 1; }
@@ -42,7 +46,7 @@ jobs:
           echo "::notice title=Super tools::lpdump, lpunpack, lpmake from AOSP (LonelyFool/lpunpack_and_lpmake ${LP_COMMIT::7})"
       - name: Test the script on a pretend super image
         run: |
-          set -e
+          trap 'echo "::error title=Kit test step::line $LINENO: $BASH_COMMAND (exit $?)"' ERR
           mkdir -p kit/bin && cp lp/bin/lpdump lp/bin/lpunpack lp/bin/lpmake kit/bin/
           cp tools/make-super.sh kit/ && chmod +x kit/make-super.sh
           t=$RUNNER_TEMP/t; mkdir -p $t
