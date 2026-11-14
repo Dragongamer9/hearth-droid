@@ -23,6 +23,12 @@ it's ticked.
 - [x] Boots on the Oukitel RT8 (test build 20261114-411f0bc)
 - [ ] Android's web engine picked on the first start (Hearth crashed with "No WebView installed" until
       `cmd webviewupdate set-webview-implementation com.android.webview`)
+- [ ] RT8 night vision camera (on hold, Nov 2026). Found so far: the stock camera is com.mediatek.camera
+      (stock system_ext/app/WtkCamera, with libimage_detect, libnn_sample, libcipher_utils from system_ext/lib64);
+      Hearth Droid doesn't use the stock system_ext. Installed as a normal app it can't open the camera (needs
+      SYSTEM_CAMERA and MediaTek's ACCESS_MTK_MMHW); as a priv-app (adb remount test) it still didn't open, log not
+      read yet. Oukitel's camera flags (ro.odm_main2_camera, ro.odm_cam_*) are in the stock system build.prop.
+      Fix goes in the laptop kit (Oukitel's files never go on GitHub).
 - [ ] USB data in Android and fastbootd on the RT8 (only the bootloader shows up on the PC; adb works over Wi-Fi)
 - [ ] Hearth as the home screen from the first start, with no chooser
 - [ ] **Boot screen** mockup: the version line ("Hearth Droid [VERSION] · Android 15 base · running from slot A")
