@@ -21,14 +21,19 @@ jobs:
   kit:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The tools' AOSP source is from 2021: it builds with that era's compiler and C++ headers (Ubuntu 20.04).
+    container: ubuntu:20.04
     steps:
+      - name: Build tools
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq clang git file ca-certificates e2fsprogs android-sdk-libsparse-utils >/dev/null
       - uses: actions/checkout@v4
       - name: Android's super tools
         run: |
-          sudo apt-get install -y -qq clang >/dev/null
           git init -q lp && cd lp
           git fetch -q --depth 1 "$LP_REPO" "$LP_COMMIT" && git checkout -q FETCH_HEAD
-          bash make.sh > ../lp-build.log 2>&1 || { echo "::error title=Super tools::$(tail -30 ../lp-build.log | tr '\n' '|' | cut -c1-3500)"; exit 1; }
+          bash make.sh > ../lp-build.log 2>&1 || { echo "::error title=Super tools::$(grep -E -B2 -A3 'error:|Error ' ../lp-build.log | head -40 | tr '\n' '|' | cut -c1-3500)"; exit 1; }
           for t in lpdump lpunpack lpmake; do
             [ -x "bin/$t" ] || { echo "::error title=Super tools::$t wasn't built"; exit 1; }
             file "bin/$t" | grep -q 'statically linked' || echo "::warning title=Super tools::$t isn't static: $(file bin/$t)"
@@ -38,7 +43,6 @@ jobs:
       - name: Test the script on a pretend super image
         run: |
           set -e
-          sudo apt-get install -y -qq android-sdk-libsparse-utils >/dev/null
           mkdir -p kit/bin && cp lp/bin/lpdump lp/bin/lpunpack lp/bin/lpmake kit/bin/
           cp tools/make-super.sh kit/ && chmod +x kit/make-super.sh
           t=$RUNNER_TEMP/t; mkdir -p $t
@@ -55,7 +59,7 @@ jobs:
           # The new system: bigger than stock's, as Hearth Droid's is.
           truncate -s 1200M $t/hd.img; mkfs.ext4 -q $t/hd.img
           kit/make-super.sh $t/stock-super.img $t/hd.img $t/hearth-super.img
-          kit/bin/lpdump $t/hearth-super.img > $t/dump.txt 2>&1 || { sudo apt-get install -y -qq android-sdk-libsparse-utils >/dev/null; simg2img $t/hearth-super.img $t/raw.img; kit/bin/lpdump $t/raw.img > $t/dump.txt; }
+          kit/bin/lpdump $t/hearth-super.img > $t/dump.txt 2>&1 || { simg2img $t/hearth-super.img $t/raw.img; kit/bin/lpdump $t/raw.img > $t/dump.txt; }
           grep -A3 'Name: system_a' $t/dump.txt | grep -q 'Attributes: readonly' || { echo "::error title=Kit test::system_a missing"; cat $t/dump.txt; exit 1; }
           grep -q 'Name: vendor_a' $t/dump.txt || { echo "::error title=Kit test::vendor_a missing"; exit 1; }
           echo "::notice title=Kit test::$(grep -E 'Name: (system|vendor|product)_a' -A4 $t/dump.txt | grep -E 'Name|Extents|Size' | tr '\n' ' ' | cut -c1-800)"
