@@ -90,7 +90,9 @@ inject() {
   label_like "$sys/etc/init/vndk.rc" "$sys/etc/init/hearth.rc"
   if [ -f "$sys/bin/phh-on-boot.sh" ]; then label_like "$sys/bin/phh-on-boot.sh" "$sys/bin/hearth-on-boot.sh"
   else label_like "$sys/bin/sh" "$sys/bin/hearth-on-boot.sh"; fi
-  grep -q phhsu_daemon "$sys/etc/selinux/plat_sepolicy.cil" || err "this base has no phhsu_daemon domain; hearth.rc needs a different one"
+  # The domain hearth.rc runs in is TrebleDroid's (in system_ext's policy); without it the script would never run.
+  cat "$sys"/etc/selinux/*.cil "$sys"/system_ext/etc/selinux/*.cil "$sys"/product/etc/selinux/*.cil 2>/dev/null \
+    | grep -q '(type phhsu_daemon)' || err "this base has no phhsu_daemon domain; hearth.rc needs a different one"
 
   # Check: every file we added carries a label, and it's the same as its folder's.
   local bad=0
