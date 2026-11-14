@@ -27,7 +27,7 @@ jobs:
       - name: Build tools
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq && apt-get install -y -qq clang git file ca-certificates e2fsprogs android-sdk-libsparse-utils >/dev/null
+          apt-get update -qq && apt-get install -y -qq clang zlib1g-dev git file ca-certificates e2fsprogs android-sdk-libsparse-utils >/dev/null
       - uses: actions/checkout@v4
       - name: Android's super tools
         run: |
