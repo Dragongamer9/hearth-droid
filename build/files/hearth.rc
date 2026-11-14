@@ -1,0 +1,4 @@
+# Hearth Droid: runs once Android has finished starting. In the background, so it never holds up start-up;
+# if it fails, nothing else changes.
+on property:sys.boot_completed=1
+    exec_background u:r:phhsu_daemon:s0 root -- /system/bin/sh /system/bin/hearth-on-boot.sh

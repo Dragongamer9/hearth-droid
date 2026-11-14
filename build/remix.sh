@@ -70,6 +70,10 @@ inject() {
     install -m 0644 "$boot" "$sys/product/media/bootanimation.zip"
   fi
 
+  # Hearth's start-up script (build/files): web engine on the first start, Hearth as home once.
+  install -m 0644 "$here/files/hearth.rc" "$sys/etc/init/hearth.rc"
+  install -m 0755 "$here/files/hearth-on-boot.sh" "$sys/bin/hearth-on-boot.sh"
+
   # Hearth's own properties, added at the end; Android's are left as they are.
   printf '\n# Hearth Droid\nro.hearth.droid=1\nro.hearth.droid.base=%s\nro.hearth.droid.build=%s\n' \
     "$base_tag" "$build_id" >> "$sys/build.prop"
@@ -82,6 +86,11 @@ inject() {
   for f in "$sys/etc/permissions/privapp-permissions-hearth.xml" "$sys/media/bootanimation.zip"; do
     label_like "$(dirname "$f")" "$f"
   done
+  # The rc file like the other rc files; the script like TrebleDroid's own start-up script.
+  label_like "$sys/etc/init/vndk.rc" "$sys/etc/init/hearth.rc"
+  if [ -f "$sys/bin/phh-on-boot.sh" ]; then label_like "$sys/bin/phh-on-boot.sh" "$sys/bin/hearth-on-boot.sh"
+  else label_like "$sys/bin/sh" "$sys/bin/hearth-on-boot.sh"; fi
+  grep -q phhsu_daemon "$sys/etc/selinux/plat_sepolicy.cil" || err "this base has no phhsu_daemon domain; hearth.rc needs a different one"
 
   # Check: every file we added carries a label, and it's the same as its folder's.
   local bad=0
@@ -90,7 +99,7 @@ inject() {
     a=$(getfattr --absolute-names -e hex -n security.selinux "$f" 2>/dev/null | sed -n 's/^security.selinux=//p')
     b=$(getfattr --absolute-names -e hex -n security.selinux "$(dirname "$f")" 2>/dev/null | sed -n 's/^security.selinux=//p')
     if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "::error title=SELinux label::$f"; bad=1; fi
-  done < <(find "$app" "$sys/etc/permissions/privapp-permissions-hearth.xml" "$sys/media/bootanimation.zip" -mindepth 0 -print0)
+  done < <(find "$app" "$sys/etc/permissions/privapp-permissions-hearth.xml" "$sys/media/bootanimation.zip" "$sys/etc/init/hearth.rc" -mindepth 0 -print0)
   [ "$bad" = 0 ] || err "some added files don't carry the right SELinux label (see above)"
 
   local ctx; ctx=$(getfattr --absolute-names -n security.selinux --only-values "$app/HearthLauncher.apk" | tr -d '\0')
