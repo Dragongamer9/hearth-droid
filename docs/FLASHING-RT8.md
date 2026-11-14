@@ -58,7 +58,8 @@ whole new super partition, flashed from the normal bootloader:
 
 1. Download the kit: Actions › **Bootloader install kit** › newest green run › Artifacts ›
    `hearth-droid-bootloader-kit`. Unzip it next to the Hearth Droid image.
-2. `sudo apt install android-sdk-libsparse-utils` (for simg2img), then build the image (it only makes a file):
+2. `sudo apt install android-sdk-libsparse-utils` (for simg2img), then build the image (it only makes a file; it needs
+   about 20 GB free):
 
        ./make-super.sh <stock firmware folder>/super.img hearth-droid-arm64-ab.img hearth-super.img
 

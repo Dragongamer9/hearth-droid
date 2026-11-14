@@ -30,7 +30,7 @@ jobs:
       - name: Build tools
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq && apt-get install -y -qq clang zlib1g-dev git file ca-certificates e2fsprogs android-sdk-libsparse-utils >/dev/null
+          apt-get update -qq && apt-get install -y -qq clang zlib1g-dev python3 git file ca-certificates e2fsprogs android-sdk-libsparse-utils >/dev/null
       - uses: actions/checkout@v4
       - name: Android's super tools
         run: |
@@ -38,7 +38,7 @@ jobs:
           git init -q lp && cd lp
           git fetch -q --depth 1 "$LP_REPO" "$LP_COMMIT" && git checkout -q FETCH_HEAD
           bash make.sh > ../lp-build.log 2>&1 || { echo "::error title=Super tools::$(grep -E -B2 -A3 'error:|Error ' ../lp-build.log | head -40 | tr '\n' '|' | cut -c1-3500)"; exit 1; }
-          for t in lpdump lpunpack lpmake; do
+          for t in lpmake; do
             [ -x "bin/$t" ] || { echo "::error title=Super tools::$t wasn't built"; exit 1; }
             file "bin/$t" | grep -q 'statically linked' || echo "::warning title=Super tools::$t isn't static: $(file bin/$t)"
           done
@@ -47,8 +47,8 @@ jobs:
       - name: Test the script on a pretend super image
         run: |
           trap 'echo "::error title=Kit test step::line $LINENO: $BASH_COMMAND (exit $?)"' ERR
-          mkdir -p kit/bin && cp lp/bin/lpdump lp/bin/lpunpack lp/bin/lpmake kit/bin/
-          cp tools/make-super.sh kit/ && chmod +x kit/make-super.sh
+          mkdir -p kit/bin && cp lp/bin/lpmake kit/bin/
+          cp tools/make-super.sh tools/super.py kit/ && chmod +x kit/make-super.sh
           t=$RUNNER_TEMP/t; mkdir -p $t
           # A stock-shaped super: virtual A/B, group main_a/main_b, system/vendor/product in slot a, empty slot b.
           truncate -s 300M $t/sys.img $t/ven.img $t/pro.img
@@ -64,13 +64,18 @@ jobs:
           truncate -s 1200M $t/hd.img; mkfs.ext4 -q $t/hd.img
           kit/make-super.sh $t/stock-super.img $t/hd.img $t/hearth-super.img > $t/run.log 2>&1 || {
             echo "::error title=make-super::$(tail -25 $t/run.log | tr '\n' '|' | cut -c1-3000)"
-            kit/bin/lpdump $t/stock-super.img 2>&1 | head -60 | tr '\n' '|' | cut -c1-3500 | sed 's/^/::notice title=lpdump stock::/'
-            exit 1; }
+              exit 1; }
           cat $t/run.log
-          kit/bin/lpdump $t/hearth-super.img > $t/dump.txt 2>&1 || { simg2img $t/hearth-super.img $t/raw.img; kit/bin/lpdump $t/raw.img > $t/dump.txt; }
-          grep -A3 'Name: system_a' $t/dump.txt | grep -q 'Attributes: readonly' || { echo "::error title=Kit test::system_a missing"; cat $t/dump.txt; exit 1; }
-          grep -q 'Name: vendor_a' $t/dump.txt || { echo "::error title=Kit test::vendor_a missing"; exit 1; }
-          echo "::notice title=Kit test::$(grep -E 'Name: (system|vendor|product)_a' -A4 $t/dump.txt | grep -E 'Name|Extents|Size' | tr '\n' ' ' | cut -c1-800)"
+          simg2img $t/hearth-super.img $t/raw.img
+          python3 kit/super.py show $t/raw.img > $t/dump.txt
+          cat $t/dump.txt
+          grep -qE '^  system_a +main_a +1200 MB readonly' $t/dump.txt || { echo "::error title=Kit test::system_a isn't Hearth Droid's size: $(tr '\n' '|' < $t/dump.txt)"; exit 1; }
+          grep -qE '^  vendor_a +main_a +300 MB' $t/dump.txt || { echo "::error title=Kit test::vendor_a missing"; exit 1; }
+          # vendor's content came through unchanged
+          mkdir -p $t/v && python3 kit/super.py extract $t/raw.img $t/v
+          cmp $t/v/vendor_a.img $t/ven.img || { echo "::error title=Kit test::vendor_a changed"; exit 1; }
+          cmp <(head -c 1258291200 $t/v/system_a.img) $t/hd.img || { echo "::error title=Kit test::system_a isn't Hearth Droid"; exit 1; }
+          echo "::notice title=Kit test::$(tr '\n' '|' < $t/dump.txt)"
       - uses: actions/upload-artifact@v4
         with:
           name: hearth-droid-bootloader-kit
