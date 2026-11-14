@@ -84,7 +84,11 @@ jobs:
       - name: Pack
         run: |
           cd out
-          xz -T0 -6 hearth-droid-arm64-ab.img
+          ls -ls hearth-droid-arm64-ab.img | sed 's/^/::notice title=Image file::/'
+          if ! xz -T0 -6 -c hearth-droid-arm64-ab.img > hearth-droid-arm64-ab.img.xz 2> xz.log; then
+            echo "::error title=Pack::xz: $(tr '\n' '|' < xz.log | cut -c1-1500)"; exit 1
+          fi
+          rm -f hearth-droid-arm64-ab.img xz.log
           sha256sum hearth-droid-arm64-ab.img.xz > hearth-droid-arm64-ab.img.xz.sha256
           echo "::notice title=Test build $BUILD_ID::$(du -h hearth-droid-arm64-ab.img.xz | cut -f1), SHA-256 $(cut -d' ' -f1 hearth-droid-arm64-ab.img.xz.sha256)"
 
