@@ -19,7 +19,7 @@ command -v simg2img >/dev/null || die "simg2img isn't installed: sudo apt instal
 [ -f "$stock" ] || die "can't find the stock super image: $stock"
 [ -f "$hd" ] || die "can't find the Hearth Droid image: $hd"
 [ "$(blkid -o value -s TYPE "$hd" 2>/dev/null || true)" = ext4 ] || \
-  [ "$(head -c 1084 "$hd" | tail -c 2 | od -An -tx1 | tr -d ' ')" = "53ef" ] || die "$hd isn't a Hearth Droid system image (no ext4 inside)"
+  [ "$(head -c 1082 "$hd" | tail -c 2 | od -An -tx1 | tr -d ' ')" = "53ef" ] || die "$hd isn't a Hearth Droid system image (no ext4 inside)"
 
 work=$(mktemp -d "${TMPDIR:-/var/tmp}/hearth-super.XXXXXX")
 trap 'rm -rf "$work"' EXIT
