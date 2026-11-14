@@ -15,8 +15,15 @@ it's ticked.
 - [x] Build pipeline: TrebleDroid Android 15 arm64 A/B vanilla, pinned in `base.lock`
 - [x] Hearth for Android built in as a system (priv-app) app, with its native libraries; its privileged permissions
       allowed from Android's own list, so a missing one can't stop Android starting
-- [x] Hearth boot animation (flame, "Hearth", pulsing dots) (needs testing on a device)
-- [x] Flashing and going-back guide for the RT8 (`docs/FLASHING-RT8.md`)
+- [x] Hearth boot animation: Hearth OS's own startup animation (flame by default; any of the seven can be picked
+      when building) (needs testing on a device)
+- [ ] Picking the boot animation on the device (like Hearth OS's Settings › Boot & startup)
+- [x] Flashing and going-back guide for the RT8 (`docs/FLASHING-RT8.md`), and the bootloader install kit for
+      devices whose fastbootd can't be reached (`tools/make-super.sh`)
+- [x] Boots on the Oukitel RT8 (test build 20261114-411f0bc)
+- [ ] Android's web engine picked on the first start (Hearth crashed with "No WebView installed" until
+      `cmd webviewupdate set-webview-implementation com.android.webview`)
+- [ ] USB data in Android and fastbootd on the RT8 (only the bootloader shows up on the PC; adb works over Wi-Fi)
 - [ ] Hearth as the home screen from the first start, with no chooser
 - [ ] **Boot screen** mockup: the version line ("Hearth Droid [VERSION] · Android 15 base · running from slot A")
 - [ ] **Setup** mockup: Hearth's setup (Language, Wi-Fi, Controller, Google apps, Hearth Link, Pick your look), with

@@ -1,91 +1,78 @@
 #!/usr/bin/env python3
-"""Hearth's boot animation (bootanimation.zip): the flame and "Hearth" fade in, then three dots pulse until Android
-is ready. The zip is stored (no compression), which Android's boot animation needs.
+"""Hearth Droid's boot animation (bootanimation.zip), made from one of Hearth OS's startup animations
+(hearth-os: os/system_files/usr/share/hearth/startup-movies/hearth-<id>-16x10.webm, fetched at build time, never
+copied into this repo). Like on Hearth OS:
 
-usage: make-bootanimation.py <out.zip> [accent hex]
+  part0  plays once: the animation up to the lit Hearth mark
+  part1  loops while Android finishes starting: the lit mark, gently breathing
+  part2  plays to the end once Android is ready: the animation's own fade-out
+
+Android needs the zip stored (no compression); frames are JPEG to keep /system small.
+
+usage: make-bootanimation.py <movie.webm> <out.zip>      (ffmpeg, Pillow)
 """
+import glob
 import io
-import math
+import os
+import subprocess
 import sys
+import tempfile
 import zipfile
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageStat
 
-out = sys.argv[1]
-accent = sys.argv[2] if len(sys.argv) > 2 else "#FF7A3D"
-W, H, FPS = 1280, 800, 30
-BG = (5, 7, 10)
-TEXT = (232, 238, 245)
-ACC = tuple(int(accent.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+movie, out = sys.argv[1], sys.argv[2]
+FPS = 30
 
 
-def font(size):
-    for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-              "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
-        try:
-            return ImageFont.truetype(f, size)
-        except OSError:
-            pass
-    return ImageFont.load_default()
+def die(msg):
+    sys.exit(f"::error title=Boot animation::{msg}")
 
 
-TITLE = font(64)
+with tempfile.TemporaryDirectory() as tmp:
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", movie, "-vsync", "0", os.path.join(tmp, "%04d.png")],
+                       capture_output=True, text=True)
+    if r.returncode:
+        die(f"ffmpeg couldn't read {movie}: {r.stderr[-500:]}")
+    frames = sorted(glob.glob(os.path.join(tmp, "*.png")))
+    if len(frames) < 60:
+        die(f"{movie} has only {len(frames)} frames")
+    W, H = Image.open(frames[0]).size
 
+    # Where the fade-out starts: the last frame still near the movie's brightest, before it drops for good.
+    lum = [ImageStat.Stat(Image.open(f).convert("L").resize((160, 100))).mean[0] for f in frames]
+    peak = max(lum[len(lum) // 2:])
+    fade = len(frames)
+    for i in range(len(frames) - 1, len(frames) // 2, -1):
+        if lum[i] >= peak * 0.95:
+            fade = i + 1
+            break
+    if fade >= len(frames) - 2:
+        fade = len(frames)  # no fade-out in this one: part2 stays empty
+    intro = frames[:fade]
+    # The loop: the last second of the lit mark, forwards then backwards, so it breathes without a jump.
+    hold = intro[-FPS:] if len(intro) > FPS else intro
+    loop = hold + hold[-2:0:-1]
+    outro = frames[fade:]
 
-def mix(c, a):
-    return tuple(int(BG[i] + (c[i] - BG[i]) * a) for i in range(3))
+    def jpg(path):
+        b = io.BytesIO()
+        Image.open(path).convert("RGB").save(b, "JPEG", quality=90, optimize=True)
+        return b.getvalue()
 
-
-def _bez(p0, p1, p2, p3, n=24):
-    return [tuple((1 - t) ** 3 * p0[k] + 3 * (1 - t) ** 2 * t * p1[k] + 3 * (1 - t) * t * t * p2[k] + t ** 3 * p3[k]
-                  for k in (0, 1)) for t in (i / n for i in range(1, n + 1))]
-
-
-# The Hearth flame, the same shape as Hearth's logo (24-unit box):
-# M12 2 c1 3 4 5 4 9 a4 4 0 0 1-8 0 c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 0-8z, and the hearth line M4 21h16.
-FLAME = [(12, 2)]
-FLAME += _bez((12, 2), (13, 5), (16, 7), (16, 11))
-FLAME += [(12 + 4 * math.cos(math.pi * i / 24), 11 + 4 * math.sin(math.pi * i / 24)) for i in range(1, 25)]
-FLAME += _bez((8, 11), (8, 9), (9, 8), (10, 7))
-FLAME += _bez((10, 7), (10, 9), (11, 10), (12, 10))
-FLAME += _bez((12, 10), (12, 7), (11, 5), (12, 2))
-
-
-def flame(d, cx, cy, s, color):
-    k = s / 12.0
-    pts = [(cx + (x - 12) * k, cy + (y - 12) * k) for x, y in FLAME]
-    w = max(3, int(k * 1.4))
-    d.line(pts, fill=color, width=w, joint="curve")
-    d.line([(cx - 8 * k, cy + 9 * k), (cx + 8 * k, cy + 9 * k)], fill=color, width=w)
-
-
-def frame(logo_a, dots_t):
-    im = Image.new("RGB", (W, H), BG)
-    d = ImageDraw.Draw(im)
-    flame(d, W // 2, 280, 110, mix(ACC, logo_a))
-    tw = d.textlength("Hearth", font=TITLE)
-    d.text(((W - tw) / 2, 430), "Hearth", font=TITLE, fill=mix(TEXT, logo_a))
-    if dots_t is not None:
-        for i in range(3):
-            a = 0.3 + 0.7 * (0.5 + 0.5 * math.cos(2 * math.pi * (dots_t - i / 3)))
-            x = W // 2 - 30 + i * 30
-            d.ellipse([x - 6, 556, x + 6, 568], fill=mix(ACC, a))
-    b = io.BytesIO()
-    im.save(b, "PNG", optimize=True)
-    return b.getvalue()
-
-
-with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
-    # Part 0 plays once: the logo fades in. Part 1 loops until Android has started.
-    z.writestr("desc.txt", f"{W} {H} {FPS}\np 1 0 part0\np 0 0 part1\n")
-    for i in range(30):
-        a = (i + 1) / 30
-        z.writestr(f"part0/{i:03d}.png", frame(a * a * (3 - 2 * a), None))
-    for i in range(30):
-        z.writestr(f"part1/{i:03d}.png", frame(1.0, i / 30))
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+        desc = f"{W} {H} {FPS}\np 1 0 part0\np 0 0 part1\n"
+        if outro:
+            desc += "c 1 0 part2\n"
+        z.writestr("desc.txt", desc)
+        for name, part in (("part0", intro), ("part1", loop), ("part2", outro)):
+            for i, f in enumerate(part):
+                z.writestr(f"{name}/{i:04d}.jpg", jpg(f))
 
 with zipfile.ZipFile(out) as z:
     bad = [i.filename for i in z.infolist() if i.compress_type != zipfile.ZIP_STORED]
     if bad:
-        sys.exit("::error title=Boot animation::compressed entries (Android can't play them): " + ", ".join(bad[:5]))
-print(f"::notice title=Boot animation::{W}x{H} at {FPS} fps, 60 frames, accent {accent}")
+        die("compressed entries (Android can't play them): " + ", ".join(bad[:5]))
+size = os.path.getsize(out)
+print(f"::notice title=Boot animation::{os.path.basename(movie)}: {W}x{H} at {FPS} fps, intro {len(intro)} frames, "
+      f"loop {len(loop)}, fade-out {len(outro)}, {size >> 20} MB")

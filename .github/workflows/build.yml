@@ -11,6 +11,9 @@ on:
       hearth_release:
         description: "Hearth OS release to take Hearth for Android from (a tag like v1.11.0, or latest)"
         default: latest
+      boot_movie:
+        description: "Hearth OS startup animation for the boot animation (flame, sweep, reveal, embers, aurora, starlight, orbit)"
+        default: flame
 
 concurrency:
   group: build-${{ github.ref }}
@@ -35,7 +38,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq erofs-utils android-sdk-libsparse-utils attr xz-utils python3-pil fonts-dejavu-core >/dev/null
+          sudo apt-get install -y -qq erofs-utils android-sdk-libsparse-utils attr xz-utils python3-pil ffmpeg >/dev/null
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           [ -x "$bt/aapt2" ] || { echo "::error title=Tools::no aapt2 in $ANDROID_HOME/build-tools"; exit 1; }
           echo "AAPT2=$bt/aapt2" >> "$GITHUB_ENV"
@@ -68,8 +71,15 @@ jobs:
           curl -fsSL --retry 3 -o dl/Hearth-android.apk "$url"
           "$AAPT2" dump badging dl/Hearth-android.apk | head -1 | sed 's/^/::notice title=Hearth APK::/'
 
+      # Hearth OS's own startup animation (hearth-os/os/system_files/usr/share/hearth/startup-movies), 16:10.
       - name: Boot animation
-        run: python3 build/make-bootanimation.py dl/bootanimation.zip
+        env:
+          MOVIE: ${{ github.event.inputs.boot_movie || 'flame' }}
+        run: |
+          case "$MOVIE" in flame|sweep|reveal|embers|aurora|starlight|orbit) ;; *) echo "::error title=Boot animation::no startup animation called $MOVIE"; exit 1;; esac
+          curl -fsSL --retry 3 -o "dl/hearth-$MOVIE-16x10.webm" \
+            "https://raw.githubusercontent.com/Dragongamer9/hearth-os/main/os/system_files/usr/share/hearth/startup-movies/hearth-$MOVIE-16x10.webm"
+          python3 build/make-bootanimation.py "dl/hearth-$MOVIE-16x10.webm" dl/bootanimation.zip
 
       - name: Build Hearth into Android
         run: |
