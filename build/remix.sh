@@ -100,13 +100,15 @@ inject() {
 case "$kind" in
   ext4)
     cp --sparse=always "$base" "$out"
-    # Android's ext4 images often share blocks between files (read-only); unshare them so it can be changed.
+    # Room first: Android's ext4 images often share blocks between files (read-only), and unsharing them needs space.
+    truncate -s +2G "$out"
+    resize2fs -f "$out" >/dev/null 2>"$work/resize.log" || err "resize2fs couldn't grow the image: $(tr '\n' '|' < "$work/resize.log")"
     if tune2fs -l "$out" | grep -q shared_blocks; then
-      e2fsck -fy -E unshare_blocks "$out" || [ $? -le 1 ] || err "e2fsck couldn't unshare the image's blocks"
+      e2fsck -fy -E unshare_blocks "$out" >"$work/unshare.log" 2>&1 || [ $? -le 1 ] \
+        || err "e2fsck couldn't unshare the image's blocks: $(tail -15 "$work/unshare.log" | tr '\n' '|')"
+      tune2fs -l "$out" | grep -q shared_blocks && err "the image still has shared blocks after unsharing"
     fi
-    truncate -s +768M "$out"
     e2fsck -fy "$out" >/dev/null || [ $? -le 1 ] || err "e2fsck found errors in the base image"
-    resize2fs "$out" >/dev/null
     mkdir -p "$work/mnt"
     mount -o loop,rw "$out" "$work/mnt"
     trap 'umount "$work/mnt" 2>/dev/null || true' EXIT
