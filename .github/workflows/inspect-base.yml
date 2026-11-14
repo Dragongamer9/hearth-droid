@@ -26,7 +26,7 @@ jobs:
         run: |
           set +e
           S=m/system
-          n() { printf '%s' "$2" | head -c 3900 | tr '\n' '|' | sed "s/^/::notice title=$1::/"; echo; }
+          n() { { echo "===== $1"; printf '%s\n' "$2"; } >> report.txt; }
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           n "init rc files" "$(ls $S/etc/init | tr '\n' ' ')"
           n "phh/treble scripts" "$(ls $S/bin | grep -i -E 'phh|treble|rw-system|on-boot' | tr '\n' ' ')"
@@ -39,13 +39,19 @@ jobs:
           n "webview apks" "$(find $S -iname '*webview*' -maxdepth 4 | tr '\n' ' ')"
           n "update_engine" "$(ls -la $S/bin/update_engine $S/bin/update_verifier 2>&1; ls $S/etc/update_engine 2>&1; ls $S/etc/security 2>&1 | head -20)"
           n "otacerts / update key" "$(ls -la $S/etc/security/otacerts.zip $S/etc/update_engine/update-payload-key.pub.pem 2>&1)"
-          n "phh-ota script" "$(cat $S/bin/phh-ota 2>&1 | head -c 3800)"
-          n "phh-ota script (more)" "$(cat $S/bin/phh-ota 2>&1 | tail -c +3800 | head -c 3800)"
+          n "phh-ota strings" "$(strings -n 6 $S/bin/phh-ota | grep -v -E '^_|GLIBC|\.so' | head -300)"
+          n "phhsu_daemon in sepolicy" "$(grep -l -r phhsu_daemon $S/etc/selinux $S/system_ext/etc/selinux $S/product/etc/selinux 2>/dev/null; grep -h -r 'phhsu_daemon' $S/etc/selinux $S/system_ext/etc/selinux $S/product/etc/selinux 2>/dev/null | head -40)"
+          n "selinux files" "$(ls -la $S/etc/selinux $S/system_ext/etc/selinux $S/product/etc/selinux 2>&1)"
+          n "labels of phh files" "$(getfattr -n security.selinux $S/bin/phh-on-boot.sh $S/bin/phh-ota $S/bin/rw-system.sh $S/etc/init/vndk.rc $S/bin/sh 2>&1)"
           n "ota props" "$(grep -h -i -E 'ota|json|update' $S/build.prop $S/product/etc/build.prop $S/system_ext/etc/build.prop 2>/dev/null | head -30)"
           n "treble app" "$(find $S -path '*TrebleApp*' -o -path '*treble_app*' -o -name 'me.phh.treble*' 2>/dev/null | head; ls $S/priv-app $S/system_ext/priv-app $S/product/priv-app 2>/dev/null | grep -i -E 'treble|phh')"
-          n "sepolicy phhsu" "$(grep -c phhsu_daemon $S/etc/selinux/plat_sepolicy.cil 2>/dev/null) lines; permissive: $(grep -h 'typepermissive' $S/etc/selinux/plat_sepolicy.cil | head -5)"
+          n "permissive domains" "$(grep -h -r 'typepermissive' $S/etc/selinux $S/system_ext/etc/selinux $S/product/etc/selinux 2>/dev/null | head -20)"
           n "phh-ota.rc" "$(cat $S/etc/init/phh-ota.rc 2>&1 | head -60)"
           n "update_engine rc" "$(cat $S/etc/init/update_engine.rc 2>&1 | head -40)"
           n "usb in rc" "$(grep -r -h -i 'sys.usb\|usb.config\|configfs' $S/etc/init/hw/init.usb*.rc $S/etc/init/hw/init.rc 2>/dev/null | head -40)"
           n "props (adb/usb/webview/ota)" "$(grep -h -i -E 'adb|usb|webview|ota|update' $S/build.prop $S/product/etc/build.prop $S/system_ext/etc/build.prop 2>/dev/null | head -40)"
           n "phh treble app" "$(find $S -iname '*treble*app*' -o -iname 'TrebleApp*' | head; ls $S/priv-app | grep -i -E 'treble|phh|update' )"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-report
+          path: report.txt
