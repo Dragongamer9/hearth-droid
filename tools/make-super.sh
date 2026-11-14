@@ -16,7 +16,7 @@ die() { echo "make-super: $*" >&2; exit 1; }
 for t in lpmake; do [ -x "$bin/$t" ] || die "$bin/$t is missing (it comes with this kit)"; done
 [ -f "$here/super.py" ] || die "super.py is missing (it comes with this kit)"
 command -v simg2img >/dev/null || die "simg2img isn't installed: sudo apt install android-sdk-libsparse-utils"
-command -v make_f2fs >/dev/null || [ -x /usr/lib/android-sdk/platform-tools/make_f2fs ] && command -v mkfs.f2fs >/dev/null || echo "Note: install f2fs-tools (sudo apt install f2fs-tools) so the last step, fastboot -w, can set up the data partition."
+command -v mkfs.f2fs >/dev/null || echo "Note: install f2fs-tools (sudo apt install f2fs-tools) so the last step, fastboot -w, can set up the data partition."
 [ -f "$stock" ] || die "can't find the stock super image: $stock"
 [ -f "$hd" ] || die "can't find the Hearth Droid image: $hd"
 [ "$(blkid -o value -s TYPE "$hd" 2>/dev/null || true)" = ext4 ] || \
@@ -31,7 +31,6 @@ free=$(( $(df --output=avail -B1 "$work" | tail -1) ))
 # 1. The stock super, unsparsed.
 if [ "$(head -c4 "$stock" | od -An -tx1 | tr -d ' \n')" = "3aff26ed" ]; then
   command -v simg2img >/dev/null || die "simg2img isn't installed: sudo apt install android-sdk-libsparse-utils"
-command -v make_f2fs >/dev/null || [ -x /usr/lib/android-sdk/platform-tools/make_f2fs ] && command -v mkfs.f2fs >/dev/null || echo "Note: install f2fs-tools (sudo apt install f2fs-tools) so the last step, fastboot -w, can set up the data partition."
   echo "Unpacking the stock super image (a few minutes)…"
   simg2img "$stock" "$work/super.raw"
 else
