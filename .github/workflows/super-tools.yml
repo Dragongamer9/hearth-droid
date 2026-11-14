@@ -62,7 +62,11 @@ jobs:
             --sparse --output $t/stock-super.img >/dev/null
           # The new system: bigger than stock's, as Hearth Droid's is.
           truncate -s 1200M $t/hd.img; mkfs.ext4 -q $t/hd.img
-          kit/make-super.sh $t/stock-super.img $t/hd.img $t/hearth-super.img
+          kit/make-super.sh $t/stock-super.img $t/hd.img $t/hearth-super.img > $t/run.log 2>&1 || {
+            echo "::error title=make-super::$(tail -25 $t/run.log | tr '\n' '|' | cut -c1-3000)"
+            kit/bin/lpdump $t/stock-super.img 2>&1 | head -60 | tr '\n' '|' | cut -c1-3500 | sed 's/^/::notice title=lpdump stock::/'
+            exit 1; }
+          cat $t/run.log
           kit/bin/lpdump $t/hearth-super.img > $t/dump.txt 2>&1 || { simg2img $t/hearth-super.img $t/raw.img; kit/bin/lpdump $t/raw.img > $t/dump.txt; }
           grep -A3 'Name: system_a' $t/dump.txt | grep -q 'Attributes: readonly' || { echo "::error title=Kit test::system_a missing"; cat $t/dump.txt; exit 1; }
           grep -q 'Name: vendor_a' $t/dump.txt || { echo "::error title=Kit test::vendor_a missing"; exit 1; }
