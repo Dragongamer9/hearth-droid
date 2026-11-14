@@ -1,5 +1,8 @@
 # Hearth Droid roadmap
 
+> **Archived (paused, November 2026).** Hearth Droid is on a full pause: no builds, no work. Everything here is kept as it
+> is so it can be picked up again; the last test build is 20261114-999eed6 (planned as 1.12, never released).
+
 Hearth Droid is Android with Hearth built in: a TrebleDroid GSI (Generic System Image) with Hearth for Android as the
 system's own app, so one image fits most Treble tablets and phones. Test device: the Oukitel RT8 (its bootloader is
 unlocked). The Galaxy Tab A9+ can't be unlocked, so it stays on the Hearth for Android app.

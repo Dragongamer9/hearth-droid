@@ -1,5 +1,8 @@
 # Hearth Droid
 
+> **Archived (paused, November 2026).** Hearth Droid is on a full pause: no builds, no work. Everything here is kept as it
+> is so it can be picked up again; the last test build is 20261114-999eed6 (planned as 1.12, never released).
+
 Android with [Hearth](https://hearthos.fun) built in. It's a remix of a
 [TrebleDroid](https://github.com/TrebleDroid/treble_experimentations) Generic System Image (GSI), so one image fits
 most Android tablets and phones that support Project Treble and have an unlockable bootloader.
